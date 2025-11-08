@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "website-new/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/privacy-policy",
+      "dest": "/website-new/privacy-policy.html"
+    },
+    {
+      "src": "/terms-of-service",
+      "dest": "/website-new/terms-of-service.html"
+    },
+    {
+      "src": "/",
+      "dest": "/website-new/index.html"
+    },
+    {
+      "src": "/(.*\\.(html|css|js))",
+      "dest": "/website-new/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/website-new/$1"
+    }
+  ]
+}
