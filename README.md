@@ -1,5 +1,7 @@
 # AgileEmails - Smart Email Management Chrome Extension
 
+**Repository:** [https://github.com/minicompetitioncom-rgbf/AgileEmails](https://github.com/minicompetitioncom-rgbf/AgileEmails)
+
 ## Overview
 AgileEmails is an intelligent Chrome extension designed to help you manage your Gmail inbox more efficiently. It automatically categorizes emails, assigns priority scores, provides DND mode, and helps you focus on what matters.
 
@@ -118,6 +120,10 @@ Current Version: 1.0.0
 
 Proprietary - All rights reserved
 
+## Repository
 
-# AgileEmails
-# AgileEmails
+🔗 **GitHub Repository:** [https://github.com/minicompetitioncom-rgbf/AgileEmails](https://github.com/minicompetitioncom-rgbf/AgileEmails)
+
+## Website
+
+Visit our website with Terms of Service and Privacy Policy in the `website-new/` directory.
