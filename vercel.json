@@ -4,19 +4,19 @@
   "rewrites": [
     {
       "source": "/",
-      "destination": "/website-new/index.html"
+      "destination": "/public/index.html"
     },
     {
       "source": "/privacy-policy",
-      "destination": "/website-new/privacy-policy.html"
+      "destination": "/public/privacy-policy.html"
     },
     {
       "source": "/terms-of-service",
-      "destination": "/website-new/terms-of-service.html"
+      "destination": "/public/terms-of-service.html"
     },
     {
       "source": "/:path*",
-      "destination": "/website-new/:path*"
+      "destination": "/public/:path*"
     }
   ]
 }

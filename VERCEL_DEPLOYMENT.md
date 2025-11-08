@@ -2,74 +2,55 @@
 
 ## Quick Fix for 404 Errors
 
-### Option 1: Set Root Directory in Vercel Dashboard (Recommended - Easiest)
+### Option 1: Use the new **public** output directory (Recommended)
 
-1. Go to your Vercel project dashboard
-2. Click on **Settings** tab
-3. Go to **General** section
-4. Scroll down to **Root Directory**
-5. Set it to: `website-new`
-6. Click **Save**
-7. Redeploy your project
+1. Make sure the project repo is up to date (we now ship all static assets in `/public`)
+2. In your Vercel project dashboard, open **Settings → General**
+3. Scroll to **Root Directory** and set it to `public`
+4. Save and redeploy
 
-This tells Vercel to treat `website-new` as the root directory, so all files will be served correctly.
+With this configuration Vercel will serve `public/index.html` as the default entry point and automatically find all supporting assets.
 
-### Option 2: Use vercel.json (Already Configured)
+### Option 2: Keep root at repository root and rely on `vercel.json`
 
-The `vercel.json` file is already configured with routing rules. After pushing to GitHub:
+If you prefer to keep the root directory as the repository root, the provided `vercel.json` handles the rewrites:
 
-1. Vercel should automatically detect the changes and redeploy
-2. The routing should work with the current configuration
-3. Routes:
-   - `/` → serves `website-new/index.html`
-   - `/privacy-policy` → serves `website-new/privacy-policy.html`
-   - `/terms-of-service` → serves `website-new/terms-of-service.html`
+1. Push the latest changes to GitHub (includes `public/` and updated `vercel.json`)
+2. Trigger a new deployment in Vercel
+3. Routing behaviour:
+   - `/` → `public/index.html`
+   - `/privacy-policy` → `public/privacy-policy.html`
+   - `/terms-of-service` → `public/terms-of-service.html`
+   - Any other asset path → `public/<path>`
 
 ## Verification
 
-After deployment, check these URLs:
-- `https://your-domain.vercel.app/` - Should show the homepage
-- `https://your-domain.vercel.app/privacy-policy` - Should show privacy policy
-- `https://your-domain.vercel.app/terms-of-service` - Should show terms of service
+After deployment, confirm the following URLs load correctly:
+- `https://your-domain.vercel.app/`
+- `https://your-domain.vercel.app/privacy-policy`
+- `https://your-domain.vercel.app/terms-of-service`
 
 ## Troubleshooting
 
-If you're still getting 404 errors:
+If a 404 still appears:
 
-1. **Check Vercel Build Logs**: 
-   - Go to your Vercel project → Deployments
-   - Click on the latest deployment
-   - Check the build logs for errors
-
-2. **Verify Files are Committed**:
+1. **Check build logs** in the Vercel deployment view for missing file messages.
+2. **Confirm files are tracked**:
    ```bash
-   git ls-files website-new/
+   git ls-files public/
    ```
-   All files should be listed
+3. **Redeploy without cache** via the deployment menu (Disable "Use existing Build Cache").
+4. **Verify relative paths** inside the HTML (CSS/JS references should be relative e.g. `styles.css`).
 
-3. **Clear Cache and Redeploy**:
-   - In Vercel dashboard, click on the latest deployment
-   - Click the three dots menu
-   - Select "Redeploy" and check "Use existing Build Cache" = OFF
+## Alternative layout
 
-4. **Check File Paths in HTML**:
-   - Make sure all CSS and JS file paths are relative (e.g., `styles.css` not `/styles.css`)
-   - Check that images and other assets use correct relative paths
-
-## Alternative Solution: Move Files to Root
-
-If the above solutions don't work, you can move the website files to the repository root:
+If you decide to serve from the repository root instead, move the files back:
 
 ```bash
-# Backup first
-cp -r website-new website-new-backup
-
-# Move files to root
-mv website-new/* .
-rm -rf website-new
-
-# Update vercel.json to remove website-new references
-# Or delete vercel.json entirely
+cp -r public public-backup
+mv public/* .
+rm -rf public
+# Update vercel.json or remove rewrites accordingly
 ```
 
-Then update all internal links in the HTML files if needed.
+Update asset paths as needed afterwards.
