@@ -1,10 +1,21 @@
 // Options page script
-const classifier = new EmailClassifier();
+let classifier;
+
+// Initialize classifier
+try {
+  classifier = new EmailClassifier();
+} catch (e) {
+  console.error('AgileEmails: Failed to initialize classifier', e);
+}
 
 document.addEventListener('DOMContentLoaded', () => {
-  setupTabs();
-  loadSettings();
-  setupEventListeners();
+  try {
+    setupTabs();
+    loadSettings();
+    setupEventListeners();
+  } catch (error) {
+    console.error('AgileEmails: Error initializing options page', error);
+  }
 });
 
 function setupTabs() {
@@ -35,23 +46,50 @@ function setupTabs() {
 }
 
 function setupEventListeners() {
-  // Pricing
-  document.querySelectorAll('[data-select]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const tier = e.target.getAttribute('data-select');
-      chrome.storage.local.set({ pricingTier: tier }, () => {
-        updatePricingUI();
-        alert(`Plan changed to ${tier.toUpperCase()}`);
+  try {
+    // Pricing
+    document.querySelectorAll('[data-select]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const tier = e.currentTarget.getAttribute('data-select') || e.target.closest('[data-select]')?.getAttribute('data-select');
+        if (tier) {
+          chrome.storage.local.set({ pricingTier: tier }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('AgileEmails: Error saving pricing tier', chrome.runtime.lastError);
+              alert('Error saving plan. Please try again.');
+            } else {
+              updatePricingUI();
+              alert(`Plan changed to ${tier.toUpperCase()}`);
+            }
+          });
+        }
       });
     });
-  });
 
-  // Categories
-  document.getElementById('saveCategories').addEventListener('click', saveCategories);
-  document.getElementById('addDNDRule').addEventListener('click', addDNDRule);
-  document.getElementById('saveDNDRules').addEventListener('click', saveDNDRules);
-  document.getElementById('saveAutoDelete').addEventListener('click', saveAutoDelete);
-  document.getElementById('saveGeneral').addEventListener('click', saveGeneral);
+    // Categories
+    const saveCategoriesBtn = document.getElementById('saveCategories');
+    const addDNDRuleBtn = document.getElementById('addDNDRule');
+    const saveDNDRulesBtn = document.getElementById('saveDNDRules');
+    const saveAutoDeleteBtn = document.getElementById('saveAutoDelete');
+    const saveGeneralBtn = document.getElementById('saveGeneral');
+    
+    if (saveCategoriesBtn) {
+      saveCategoriesBtn.addEventListener('click', saveCategories);
+    }
+    if (addDNDRuleBtn) {
+      addDNDRuleBtn.addEventListener('click', addDNDRule);
+    }
+    if (saveDNDRulesBtn) {
+      saveDNDRulesBtn.addEventListener('click', saveDNDRules);
+    }
+    if (saveAutoDeleteBtn) {
+      saveAutoDeleteBtn.addEventListener('click', saveAutoDelete);
+    }
+    if (saveGeneralBtn) {
+      saveGeneralBtn.addEventListener('click', saveGeneral);
+    }
+  } catch (error) {
+    console.error('AgileEmails: Error setting up event listeners', error);
+  }
 }
 
 function loadSettings() {
@@ -295,6 +333,7 @@ function loadGeneralSettings() {
     document.getElementById('showPriorityColors').checked = settings.showPriorityColors !== false;
     document.getElementById('showCategoryBadges').checked = settings.showCategoryBadges !== false;
     document.getElementById('enableThreadSummary').checked = settings.enableThreadSummary !== false;
+    document.getElementById('reorderByPriority').checked = settings.reorderByPriority === true; // Default to false
   });
 }
 
@@ -311,7 +350,8 @@ function saveGeneral() {
       contextWindow: finalContextWindow,
       showPriorityColors: document.getElementById('showPriorityColors').checked,
       showCategoryBadges: document.getElementById('showCategoryBadges').checked,
-      enableThreadSummary: document.getElementById('enableThreadSummary').checked
+      enableThreadSummary: document.getElementById('enableThreadSummary').checked,
+      reorderByPriority: document.getElementById('reorderByPriority').checked
     };
     
     chrome.storage.local.set({ settings }, () => {

@@ -20,7 +20,8 @@ chrome.runtime.onInstalled.addListener(() => {
         '3months': false,
         '6months': false,
         '1year': true
-      }
+      },
+      reorderByPriority: false // Disabled by default to prevent overlay issues
     }
   });
 });
@@ -39,23 +40,44 @@ chrome.alarms.create('processEmails', { periodInMinutes: 15 });
 
 // Process emails in the background
 async function processEmails() {
-  // This would integrate with Gmail API or content script
-  // For now, we'll let the content script handle it
-  chrome.tabs.query({ url: 'https://mail.google.com/*' }, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, { action: 'processEmails' });
+  try {
+    const tabs = await new Promise((resolve) => {
+      chrome.tabs.query({ url: 'https://mail.google.com/*' }, resolve);
     });
-  });
+    
+    tabs.forEach(tab => {
+      chrome.tabs.sendMessage(tab.id, { action: 'processEmails' }, (response) => {
+        if (chrome.runtime.lastError) {
+          // Tab might not have content script loaded yet, ignore
+          console.debug('AgileEmails: Could not send message to tab', tab.id, chrome.runtime.lastError.message);
+        }
+      });
+    });
+  } catch (error) {
+    console.error('AgileEmails: Error processing emails', error);
+  }
 }
 
 function handleAutoDelete(alarmName) {
-  const category = alarmName.replace('autoDelete-', '');
-  // Auto-delete logic would go here
-  chrome.tabs.query({ url: 'https://mail.google.com/*' }, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, { action: 'autoDelete', category });
+  try {
+    const category = alarmName.replace('autoDelete-', '');
+    chrome.tabs.query({ url: 'https://mail.google.com/*' }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        console.error('AgileEmails: Error querying tabs', chrome.runtime.lastError);
+        return;
+      }
+      
+      tabs.forEach(tab => {
+        chrome.tabs.sendMessage(tab.id, { action: 'autoDelete', category }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.debug('AgileEmails: Could not send auto-delete message to tab', tab.id);
+          }
+        });
+      });
     });
-  });
+  } catch (error) {
+    console.error('AgileEmails: Error handling auto-delete', error);
+  }
 }
 
 // Handle messages from content script
@@ -64,16 +86,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
       sendResponse(data);
     });
-    return true;
+    return true; // Keep channel open for async response
   } else if (request.action === 'saveEmailData') {
+    // Use async pattern to prevent race conditions
     chrome.storage.local.get(['emailData'], (data) => {
-      const emailData = data.emailData || [];
-      emailData.push(request.emailData);
-      chrome.storage.local.set({ emailData: emailData.slice(-1000) }); // Keep last 1000
+      try {
+        const emailData = data.emailData || [];
+        
+        // Check if email already exists (prevent duplicates)
+        const existingIndex = emailData.findIndex(e => e.id === request.emailData.id);
+        if (existingIndex >= 0) {
+          // Update existing email
+          emailData[existingIndex] = request.emailData;
+        } else {
+          // Add new email
+          emailData.push(request.emailData);
+        }
+        
+        // Keep last 1000 emails, sorted by processedAt (newest first)
+        const sorted = emailData.sort((a, b) => (b.processedAt || 0) - (a.processedAt || 0));
+        const trimmed = sorted.slice(0, 1000);
+        
+        chrome.storage.local.set({ emailData: trimmed }, () => {
+          if (chrome.runtime.lastError) {
+            console.error('AgileEmails: Error saving email data', chrome.runtime.lastError);
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          } else {
+            sendResponse({ success: true });
+          }
+        });
+      } catch (error) {
+        console.error('AgileEmails: Error processing email data', error);
+        sendResponse({ success: false, error: error.message });
+      }
     });
-    sendResponse({ success: true });
-    return true;
+    return true; // Keep channel open for async response
   }
+  return false;
 });
 
 

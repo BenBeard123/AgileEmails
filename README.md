@@ -9,14 +9,14 @@ AgileEmails is an intelligent Chrome extension designed to help you manage your 
 
 ### Core Features
 - **Automatic Email Categorization**: Emails are automatically sorted into categories:
-  - School/Academics
-  - Work (Current)
-  - Work (Job Opportunities)
-  - Finance (Bank/CC)
-  - Personal (Family/Friends)
-  - Authentication Codes/Login (auto-delete after 1 day)
-  - Promo (auto-delete after 1 day)
-  - Other
+  - Academics
+  - Work
+  - Jobs
+  - Finance
+  - Personal
+  - Auth
+  - Newsletter
+  - Others
 
 - **Priority Scoring (1-5)**: 
   - 5: Urgent (Red)
