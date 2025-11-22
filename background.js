@@ -27,37 +27,55 @@ async function scheduleProcessEmailsAlarm() {
 }
 
 // On install: initialize storage + create alarms
-chrome.runtime.onInstalled.addListener(async () => {
-  await chrome.storage.local.set({
-    categories: {
-      'school': { enabled: true, color: '#4A90E2', autoDelete: null },
-      'work-current': { enabled: true, color: '#E24A4A', autoDelete: null },
-      'work-opportunities': { enabled: true, color: '#E2A44A', autoDelete: null },
-      'finance': { enabled: true, color: '#4AE24A', autoDelete: null },
-      'personal': { enabled: true, color: '#E24AE2', autoDelete: null },
-      'auth-codes': { enabled: true, color: '#A4A4A4', autoDelete: 1 },
-      'promo': { enabled: true, color: '#FFB84D', autoDelete: 1 },
-      'other': { enabled: true, color: '#808080', autoDelete: null }
-    },
-    dndRules: [],
-    pricingTier: 'free',
-    settings: {
-      contextWindow: 7, // days
-      autoDeleteOldEmails: true,
-      autoDeleteThresholds: {
-        '3months': false,
-        '6months': false,
-        '1year': true
-      }
+chrome.runtime.onInstalled.addListener(async (details) => {
+  try {
+    console.log('AgileEmails: onInstalled triggered', details.reason);
+    
+    // Initialize storage
+    try {
+      await chrome.storage.local.set({
+        categories: {
+          'school': { enabled: true, color: '#4A90E2', autoDelete: null },
+          'work-current': { enabled: true, color: '#E24A4A', autoDelete: null },
+          'work-opportunities': { enabled: true, color: '#E2A44A', autoDelete: null },
+          'finance': { enabled: true, color: '#4AE24A', autoDelete: null },
+          'personal': { enabled: true, color: '#E24AE2', autoDelete: null },
+          'auth-codes': { enabled: true, color: '#A4A4A4', autoDelete: 1 },
+          'promo': { enabled: true, color: '#FFB84D', autoDelete: 1 },
+          'other': { enabled: true, color: '#808080', autoDelete: null }
+        },
+        dndRules: [],
+        pricingTier: 'free',
+        settings: {
+          contextWindow: 7, // days
+          autoDeleteOldEmails: true,
+          autoDeleteThresholds: {
+            '3months': false,
+            '6months': false,
+            '1year': true
+          }
+        }
+      });
+      console.log('AgileEmails: Storage initialized successfully');
+    } catch (storageError) {
+      console.error('AgileEmails: Error initializing storage', storageError);
     }
-  });
 
-  await scheduleProcessEmailsAlarm();
+    // Schedule alarm safely
+    await scheduleProcessEmailsAlarm();
+  } catch (error) {
+    console.error('AgileEmails: Error in onInstalled handler', error);
+  }
 });
 
 // On Chrome startup, recreate alarms (MV3-safe)
 chrome.runtime.onStartup.addListener(async () => {
-  await scheduleProcessEmailsAlarm();
+  try {
+    console.log('AgileEmails: onStartup triggered');
+    await scheduleProcessEmailsAlarm();
+  } catch (error) {
+    console.error('AgileEmails: Error in onStartup handler', error);
+  }
 });
 
 // ===============================
