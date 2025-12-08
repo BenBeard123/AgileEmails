@@ -14,6 +14,7 @@ let processingTimeout = null;
 let isProcessing = false;
 let lastProcessTime = 0;
 const MIN_PROCESS_INTERVAL = 3000; // Don't process more than once every 3 seconds
+let isReapplyingOverlays = false; // Prevent recursive calls to reapplyOverlays
 
 // Initialize classifier
 try {
@@ -166,8 +167,19 @@ function init() {
   }, { passive: true });
   
   // Check on any DOM mutation in email area
-  const emailAreaObserver = new MutationObserver(() => {
-    if (!isProcessing) {
+  const emailAreaObserver = new MutationObserver((mutations) => {
+    // Ignore mutations caused by our own overlay additions to prevent infinite loop
+    const isOurMutation = mutations.some(mutation => {
+      return Array.from(mutation.addedNodes).some(node => {
+        if (node.nodeType === 1) {
+          return node.classList?.contains('agileemails-overlay') || 
+                 node.querySelector?.('.agileemails-overlay') !== null;
+        }
+        return false;
+      });
+    });
+    
+    if (!isProcessing && !isReapplyingOverlays && !isOurMutation) {
       reapplyOverlays();
     }
   });
@@ -672,7 +684,9 @@ let overlaySettingsCache = null;
 let lastSettingsFetch = 0;
 
 function reapplyOverlays() {
-  if (isProcessing) return;
+  if (isProcessing || isReapplyingOverlays) return;
+  
+  isReapplyingOverlays = true;
   
   try {
     // Cache settings to avoid frequent storage calls
@@ -682,12 +696,15 @@ function reapplyOverlays() {
         overlaySettingsCache = data;
         lastSettingsFetch = now;
         doReapplyOverlays(data);
+        isReapplyingOverlays = false;
       });
     } else {
       doReapplyOverlays(overlaySettingsCache);
+      isReapplyingOverlays = false;
     }
   } catch (error) {
     console.error('AgileEmails: Error reapplying overlays', error);
+    isReapplyingOverlays = false;
   }
 }
 
