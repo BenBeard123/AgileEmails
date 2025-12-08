@@ -152,17 +152,26 @@ function init() {
   // Check on mouseover (immediate)
   // Reuse mainArea declared earlier (line 77)
   mainArea.addEventListener('mouseover', (e) => {
-    const emailRow = e.target.closest('tr[role="row"]');
-    if (emailRow && !emailRow.querySelector('.agileemails-overlay')) {
-      const emailId = emailRow.getAttribute('data-agileemails-id') ||
-                     emailRow.getAttribute('data-thread-perm-id');
-      if (emailId && emailCache.has(emailId)) {
-        if (!isProcessing) {
-          chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
-            applyOverlayToElement(emailRow, emailCache.get(emailId), data);
-          });
+    try {
+      const emailRow = e.target.closest('tr[role="row"]');
+      if (emailRow && !emailRow.querySelector('.agileemails-overlay')) {
+        const emailId = emailRow.getAttribute('data-agileemails-id') ||
+                       emailRow.getAttribute('data-thread-perm-id');
+        if (emailId && emailCache && typeof emailCache.has === 'function' && emailCache.has(emailId)) {
+          if (!isProcessing) {
+            chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
+              if (emailCache && typeof emailCache.get === 'function') {
+                const emailData = emailCache.get(emailId);
+                if (emailData) {
+                  applyOverlayToElement(emailRow, emailData, data);
+                }
+              }
+            });
+          }
         }
       }
+    } catch (error) {
+      console.error('AgileEmails: Error in mouseover handler', error);
     }
   }, { passive: true });
   
