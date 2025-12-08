@@ -177,19 +177,27 @@ function init() {
   
   // Check on any DOM mutation in email area
   const emailAreaObserver = new MutationObserver((mutations) => {
-    // Ignore mutations caused by our own overlay additions to prevent infinite loop
-    const isOurMutation = mutations.some(mutation => {
-      return Array.from(mutation.addedNodes).some(node => {
-        if (node.nodeType === 1) {
-          return node.classList?.contains('agileemails-overlay') || 
-                 node.querySelector?.('.agileemails-overlay') !== null;
+    try {
+      // Ignore mutations caused by our own overlay additions to prevent infinite loop
+      const isOurMutation = mutations.some(mutation => {
+        try {
+          return Array.from(mutation.addedNodes).some(node => {
+            if (node && node.nodeType === 1) {
+              return node.classList?.contains('agileemails-overlay') || 
+                     node.querySelector?.('.agileemails-overlay') !== null;
+            }
+            return false;
+          });
+        } catch (e) {
+          return false;
         }
-        return false;
       });
-    });
-    
-    if (!isProcessing && !isReapplyingOverlays && !isOurMutation) {
-      reapplyOverlays();
+      
+      if (!isProcessing && !isReapplyingOverlays && !isOurMutation) {
+        reapplyOverlays();
+      }
+    } catch (error) {
+      console.error('AgileEmails: Error in MutationObserver', error);
     }
   });
   
@@ -721,6 +729,11 @@ let lastSettingsFetch = 0;
 function reapplyOverlays() {
   if (isProcessing || isReapplyingOverlays) return;
   
+  // Safety check - ensure emailCache exists
+  if (!emailCache || typeof emailCache.has !== 'function') {
+    return;
+  }
+  
   isReapplyingOverlays = true;
   
   try {
@@ -728,10 +741,15 @@ function reapplyOverlays() {
     const now = Date.now();
     if (!overlaySettingsCache || now - lastSettingsFetch > 5000) {
       chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
-        overlaySettingsCache = data;
-        lastSettingsFetch = now;
-        doReapplyOverlays(data);
-        isReapplyingOverlays = false;
+        try {
+          overlaySettingsCache = data;
+          lastSettingsFetch = now;
+          doReapplyOverlays(data);
+        } catch (error) {
+          console.error('AgileEmails: Error in reapplyOverlays callback', error);
+        } finally {
+          isReapplyingOverlays = false;
+        }
       });
     } else {
       doReapplyOverlays(overlaySettingsCache);
@@ -746,55 +764,70 @@ function reapplyOverlays() {
 function doReapplyOverlays(settings) {
   if (!settings) return;
   
+  // Safety check for emailCache
+  if (!emailCache || typeof emailCache.has !== 'function' || typeof emailCache.get !== 'function') {
+    console.warn('AgileEmails: emailCache not available, skipping overlay reapplication');
+    return;
+  }
+  
   try {
     // Get all email rows currently visible
     const emailRows = document.querySelectorAll('tr[role="row"]');
     const rowsToProcess = [];
     
     emailRows.forEach(row => {
-      // Skip if row is not visible
-      if (row.offsetParent === null) return;
-      
-      // Check if this row has an overlay
-      const existingOverlay = row.querySelector('.agileemails-overlay');
-      
-      // Try multiple ways to find email ID
-      let emailId = row.getAttribute('data-agileemails-id') ||
-                    row.getAttribute('data-thread-perm-id') ||
-                    row.closest('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id');
-      
-      // If we have an email ID and it's in cache
-      if (emailId && emailCache.has(emailId)) {
-        const emailData = emailCache.get(emailId);
-        // If overlay is missing or doesn't match, re-apply
-        if (!existingOverlay || existingOverlay.getAttribute('data-email-id') !== emailId) {
-          rowsToProcess.push({
-            element: row,
-            data: emailData
-          });
-        }
-      } else if (!emailId) {
-        // Try to extract email ID from the row content (fast path)
-        const subjectEl = row.querySelector('span.bog');
-        const senderEl = row.querySelector('span[email]') || row.querySelector('.yW span');
-        if (subjectEl && senderEl) {
-          const senderEmail = senderEl.getAttribute('email') || senderEl.textContent || '';
-          const subject = subjectEl.textContent || '';
-          // Try to find in cache by matching subject and sender
-          for (const [id, cachedData] of emailCache.entries()) {
-            if (cachedData.subject === subject && cachedData.from === senderEmail) {
-              emailId = id;
-              row.setAttribute('data-agileemails-id', emailId); // Cache it for next time
-              if (!existingOverlay || existingOverlay.getAttribute('data-email-id') !== emailId) {
-                rowsToProcess.push({
-                  element: row,
-                  data: cachedData
-                });
+      try {
+        // Skip if row is not visible
+        if (row.offsetParent === null) return;
+        
+        // Check if this row has an overlay
+        const existingOverlay = row.querySelector('.agileemails-overlay');
+        
+        // Try multiple ways to find email ID
+        let emailId = row.getAttribute('data-agileemails-id') ||
+                      row.getAttribute('data-thread-perm-id') ||
+                      row.closest('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id');
+        
+        // If we have an email ID and it's in cache
+        if (emailId && emailCache.has(emailId)) {
+          const emailData = emailCache.get(emailId);
+          if (emailData) {
+            // If overlay is missing or doesn't match, re-apply
+            if (!existingOverlay || existingOverlay.getAttribute('data-email-id') !== emailId) {
+              rowsToProcess.push({
+                element: row,
+                data: emailData
+              });
+            }
+          }
+        } else if (!emailId) {
+          // Try to extract email ID from the row content (fast path)
+          const subjectEl = row.querySelector('span.bog');
+          const senderEl = row.querySelector('span[email]') || row.querySelector('.yW span');
+          if (subjectEl && senderEl) {
+            const senderEmail = senderEl.getAttribute('email') || senderEl.textContent || '';
+            const subject = subjectEl.textContent || '';
+            // Try to find in cache by matching subject and sender
+            if (typeof emailCache.entries === 'function') {
+              for (const [id, cachedData] of emailCache.entries()) {
+                if (cachedData && cachedData.subject === subject && cachedData.from === senderEmail) {
+                  emailId = id;
+                  row.setAttribute('data-agileemails-id', emailId); // Cache it for next time
+                  if (!existingOverlay || existingOverlay.getAttribute('data-email-id') !== emailId) {
+                    rowsToProcess.push({
+                      element: row,
+                      data: cachedData
+                    });
+                  }
+                  break;
+                }
               }
-              break;
             }
           }
         }
+      } catch (rowError) {
+        console.warn('AgileEmails: Error processing row in doReapplyOverlays', rowError);
+        // Continue with next row
       }
     });
     
