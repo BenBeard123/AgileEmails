@@ -149,7 +149,7 @@ function init() {
   }, { passive: true });
   
   // Check on mouseover (immediate)
-  const mainArea = document.querySelector('div[role="main"]') || document.body;
+  // Reuse mainArea declared earlier (line 77)
   mainArea.addEventListener('mouseover', (e) => {
     const emailRow = e.target.closest('tr[role="row"]');
     if (emailRow && !emailRow.querySelector('.agileemails-overlay')) {
