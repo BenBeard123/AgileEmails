@@ -543,18 +543,47 @@ function applyVisualIndicators(emails, settings) {
       // Store email ID on the element for easier lookup
       element.setAttribute('data-agileemails-id', data.id);
       
-      // Insert priority indicator on the left side of the row
-      const firstCell = element.querySelector('td:first-child') || element.querySelector('div:first-child') || element.firstElementChild;
+      // Insert priority indicator on the left side, in front of sender's name
+      // Find the sender element (where the sender name is displayed)
+      let senderEl = element.querySelector('span.yW span[email]');
+      if (!senderEl) {
+        senderEl = element.querySelector('span[email]');
+      }
+      if (!senderEl) {
+        senderEl = element.querySelector('.yW span');
+      }
+      if (!senderEl) {
+        senderEl = element.querySelector('[email]');
+      }
+      
       const priorityIndicator = overlay.querySelector('.agileemails-priority-indicator-left');
       
-      if (firstCell && priorityIndicator) {
-        // Remove existing priority indicator if any
-        const existingPriority = firstCell.querySelector('.agileemails-priority-indicator-left');
+      if (senderEl && priorityIndicator) {
+        // Remove existing priority indicator if any (check parent containers too)
+        const existingPriority = element.querySelector('.agileemails-priority-indicator-left');
         if (existingPriority) {
           existingPriority.remove();
         }
-        // Insert priority indicator as first child of first cell
-        firstCell.insertBefore(priorityIndicator, firstCell.firstChild);
+        
+        // Insert priority indicator right before the sender element
+        // Find the parent container of the sender
+        const senderParent = senderEl.parentElement;
+        if (senderParent) {
+          senderParent.insertBefore(priorityIndicator, senderEl);
+        } else {
+          // Fallback: insert before sender element itself
+          senderEl.parentNode.insertBefore(priorityIndicator, senderEl);
+        }
+      } else if (priorityIndicator) {
+        // Fallback: try first cell if sender element not found
+        const firstCell = element.querySelector('td:first-child') || element.querySelector('div:first-child') || element.firstElementChild;
+        if (firstCell) {
+          const existingPriority = firstCell.querySelector('.agileemails-priority-indicator-left');
+          if (existingPriority) {
+            existingPriority.remove();
+          }
+          firstCell.insertBefore(priorityIndicator, firstCell.firstChild);
+        }
       }
       
       // Append rest of overlay to row (for category badges, etc. on right side)
@@ -884,18 +913,45 @@ function applyOverlayToElement(element, emailData, settings) {
     // Store email ID on element for easier lookup
     element.setAttribute('data-agileemails-id', emailData.id);
     
-    // Insert priority indicator on the left side
-    const firstCell = element.querySelector('td:first-child') || element.querySelector('div:first-child') || element.firstElementChild;
+    // Insert priority indicator on the left side, in front of sender's name
+    // Find the sender element (where the sender name is displayed)
+    let senderEl = element.querySelector('span.yW span[email]');
+    if (!senderEl) {
+      senderEl = element.querySelector('span[email]');
+    }
+    if (!senderEl) {
+      senderEl = element.querySelector('.yW span');
+    }
+    if (!senderEl) {
+      senderEl = element.querySelector('[email]');
+    }
+    
     const priorityIndicator = overlay.querySelector('.agileemails-priority-indicator-left');
     
-    if (firstCell && priorityIndicator) {
+    if (senderEl && priorityIndicator) {
       // Remove existing priority indicator if any
-      const existingPriority = firstCell.querySelector('.agileemails-priority-indicator-left');
+      const existingPriority = element.querySelector('.agileemails-priority-indicator-left');
       if (existingPriority) {
         existingPriority.remove();
       }
-      // Insert priority indicator as first child of first cell
-      firstCell.insertBefore(priorityIndicator, firstCell.firstChild);
+      
+      // Insert priority indicator right before the sender element
+      const senderParent = senderEl.parentElement;
+      if (senderParent) {
+        senderParent.insertBefore(priorityIndicator, senderEl);
+      } else {
+        senderEl.parentNode.insertBefore(priorityIndicator, senderEl);
+      }
+    } else if (priorityIndicator) {
+      // Fallback: try first cell if sender element not found
+      const firstCell = element.querySelector('td:first-child') || element.querySelector('div:first-child') || element.firstElementChild;
+      if (firstCell) {
+        const existingPriority = firstCell.querySelector('.agileemails-priority-indicator-left');
+        if (existingPriority) {
+          existingPriority.remove();
+        }
+        firstCell.insertBefore(priorityIndicator, firstCell.firstChild);
+      }
     }
     
     // Append rest of overlay to row (for category badges, etc. on right side)
