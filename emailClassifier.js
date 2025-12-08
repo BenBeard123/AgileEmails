@@ -5,32 +5,32 @@ class EmailClassifier {
     this.categories = {
       'school': {
         keywords: [
-          'university', 'college', 'professor', 'prof', 'assignment', 'homework', 'course', 
-          'syllabus', 'campus', 'edu', 'education', 'student', 'class', 'lecture',
-          'exam', 'test', 'quiz', 'midterm', 'final', 'grade', 'grades', 'gpa',
-          'registration', 'enrollment', 'tuition', 'financial aid', 'scholarship',
-          'blackboard', 'canvas', 'moodle', 'coursework', 'due date', 'submission'
+          'university', 'universities', 'college', 'colleges', 'professor', 'professors', 'prof', 'assignment', 'assignments', 'homework', 'course', 'courses',
+          'syllabus', 'syllabi', 'campus', 'edu', 'education', 'student', 'students', 'class', 'classes', 'lecture', 'lectures',
+          'exam', 'exams', 'test', 'tests', 'quiz', 'quizzes', 'midterm', 'midterms', 'final', 'finals', 'grade', 'grades', 'gpa',
+          'registration', 'registrations', 'enrollment', 'enrollments', 'tuition', 'financial aid', 'scholarship', 'scholarships',
+          'blackboard', 'canvas', 'moodle', 'coursework', 'due date', 'due dates', 'submission', 'submissions'
         ],
         domains: ['edu', 'school', 'university', 'college'],
         priority: 3
       },
       'work-current': {
         keywords: [
-          'team', 'meeting', 'project', 'deadline', 'urgent', 'asap', 'standup', 'sprint',
-          'stand-up', 'stand up', 'sync', 'sync up', '1:1', 'one-on-one', 'one on one',
-          'review', 'code review', 'pr review', 'pull request', 'merge', 'deploy',
-          'sprint planning', 'retrospective', 'retro', 'all hands', 'all-hands',
+          'team', 'teams', 'meeting', 'meetings', 'project', 'projects', 'deadline', 'deadlines', 'urgent', 'asap', 'standup', 'standups', 'sprint', 'sprints',
+          'stand-up', 'stand-ups', 'stand up', 'stand ups', 'sync', 'syncs', 'sync up', 'sync ups', '1:1', 'one-on-one', 'one on one',
+          'review', 'reviews', 'code review', 'code reviews', 'pr review', 'pr reviews', 'pull request', 'pull requests', 'merge', 'merges', 'deploy', 'deploys',
+          'sprint planning', 'sprint plannings', 'retrospective', 'retrospectives', 'retro', 'retros', 'all hands', 'all-hands',
           'slack', 'jira', 'confluence', 'trello', 'asana', 'notion',
-          'follow up', 'follow-up', 'action items', 'action item', 'todo', 'to-do'
+          'follow up', 'follow-ups', 'follow-up', 'follow ups', 'action items', 'action item', 'todo', 'todos', 'to-do', 'to-dos'
         ],
         priority: 4
       },
       'work-opportunities': {
         keywords: [
-          'opportunity', 'job', 'position', 'recruiter', 'hiring', 'career', 'interview', 'linkedin',
-          'job opening', 'job opportunity', 'we are hiring', 'we\'re hiring', 'hiring now',
-          'apply now', 'application', 'resume', 'cv', 'curriculum vitae',
-          'recruiting', 'talent', 'headhunter', 'recruitment', 'job search',
+          'opportunity', 'opportunities', 'job', 'jobs', 'position', 'positions', 'recruiter', 'recruiters', 'hiring', 'career', 'careers', 'interview', 'interviews', 'linkedin',
+          'job opening', 'job openings', 'job opportunity', 'job opportunities', 'we are hiring', 'we\'re hiring', 'hiring now',
+          'apply now', 'application', 'applications', 'resume', 'resumes', 'cv', 'cvs', 'curriculum vitae',
+          'recruiting', 'talent', 'talents', 'headhunter', 'headhunters', 'recruitment', 'recruitments', 'job search', 'job searches',
           'indeed', 'glassdoor', 'monster', 'ziprecruiter', 'angel.co', 'angelist'
         ],
         priority: 3
@@ -38,25 +38,25 @@ class EmailClassifier {
       'finance': {
         keywords: [
           // Payments & transactions
-          'payment', 'invoice', 'receipt', 'transaction', 'purchase', 'charge', 'charged',
+          'payment', 'payments', 'invoice', 'invoices', 'receipt', 'receipts', 'transaction', 'transactions', 'purchase', 'purchases', 'charge', 'charges', 'charged',
           // Bank & accounts
-          'bank', 'banking', 'account', 'checking', 'savings', 'deposit', 'withdrawal', 'transfer',
+          'bank', 'banks', 'banking', 'account', 'accounts', 'checking', 'savings', 'deposit', 'deposits', 'withdrawal', 'withdrawals', 'transfer', 'transfers',
           // Credit cards
-          'credit card', 'creditcard', 'card ending', 'card number', 'expires',
+          'credit card', 'credit cards', 'creditcard', 'creditcards', 'card ending', 'card endings', 'card number', 'card numbers', 'expires',
           // Statements & balances
-          'statement', 'balance', 'account balance', 'available balance', 'account summary',
+          'statement', 'statements', 'balance', 'balances', 'account balance', 'account balances', 'available balance', 'available balances', 'account summary', 'account summaries',
           // Money amounts
-          '$', 'dollar', 'amount due', 'balance due', 'payment due', 'minimum payment',
+          '$', 'dollar', 'dollars', 'amount due', 'amounts due', 'balance due', 'balances due', 'payment due', 'payments due', 'minimum payment', 'minimum payments',
           // Subscriptions
-          'subscription', 'renewal', 'renew', 'billing', 'billed', 'monthly', 'annual', 'yearly',
-          'subscription fee', 'membership', 'auto-renew', 'auto renew',
+          'subscription', 'subscriptions', 'renewal', 'renewals', 'renew', 'billing', 'billed', 'monthly', 'annual', 'yearly',
+          'subscription fee', 'subscription fees', 'membership', 'memberships', 'auto-renew', 'auto renew',
           // Financial services
           'paypal', 'stripe', 'venmo', 'zelle', 'cash app', 'square', 'chase', 'bank of america',
           'wells fargo', 'citi', 'american express', 'amex', 'discover', 'capital one',
           // Bills & utilities
-          'bill', 'billing', 'utility', 'electric', 'gas', 'water', 'phone bill', 'internet bill',
+          'bill', 'bills', 'billing', 'utility', 'utilities', 'electric', 'gas', 'water', 'phone bill', 'phone bills', 'internet bill', 'internet bills',
           // Financial alerts
-          'alert', 'notification', 'reminder', 'payment reminder', 'overdue', 'past due'
+          'alert', 'alerts', 'notification', 'notifications', 'reminder', 'reminders', 'payment reminder', 'payment reminders', 'overdue', 'past due'
         ],
         domains: ['bank', 'paypal', 'stripe', 'chase', 'wellsfargo', 'bofa', 'citi', 'amex', 
                   'discover', 'capitalone', 'venmo', 'square', 'billing', 'invoice', 'payment'],
@@ -64,11 +64,11 @@ class EmailClassifier {
       },
       'personal': {
         keywords: [
-          'family', 'friend', 'friends', 'birthday', 'party', 'weekend', 'dinner',
-          'lunch', 'brunch', 'coffee', 'drinks', 'happy hour', 'celebration',
-          'congratulations', 'congrats', 'wedding', 'baby', 'shower', 'anniversary',
-          'holiday', 'vacation', 'trip', 'travel', 'weekend plans', 'get together',
-          'catch up', 'hang out', 'hangout'
+          'family', 'families', 'friend', 'friends', 'birthday', 'birthdays', 'party', 'parties', 'weekend', 'weekends', 'dinner', 'dinners',
+          'lunch', 'lunches', 'brunch', 'brunches', 'coffee', 'drinks', 'happy hour', 'happy hours', 'celebration', 'celebrations',
+          'congratulations', 'congrats', 'wedding', 'weddings', 'baby', 'babies', 'shower', 'showers', 'anniversary', 'anniversaries',
+          'holiday', 'holidays', 'vacation', 'vacations', 'trip', 'trips', 'travel', 'weekend plans', 'get together', 'get togethers',
+          'catch up', 'catch ups', 'hang out', 'hang outs', 'hangout', 'hangouts'
         ],
         priority: 2
       },
@@ -79,12 +79,12 @@ class EmailClassifier {
       },
       'promo': {
         keywords: [
-          'sale', 'discount', 'offer', 'deal', 'promo', 'coupon', 'subscribe', 'unsubscribe',
+          'sale', 'sales', 'discount', 'discounts', 'offer', 'offers', 'deal', 'deals', 'promo', 'promos', 'coupon', 'coupons', 'subscribe', 'unsubscribe',
           'limited time', 'limited-time', 'act now', 'buy now', 'shop now', 'order now',
-          'free shipping', 'free trial', 'special offer', 'exclusive offer', 'flash sale',
-          'clearance', 'savings', 'save up to', 'percent off', '% off', 'off',
-          'newsletter', 'marketing', 'promotional', 'advertisement', 'ad', 'ads',
-          'noreply', 'no-reply', 'donotreply', 'do not reply', 'mailing list'
+          'free shipping', 'free trial', 'free trials', 'special offer', 'special offers', 'exclusive offer', 'exclusive offers', 'flash sale', 'flash sales',
+          'clearance', 'clearances', 'savings', 'save up to', 'percent off', '% off', 'off',
+          'newsletter', 'newsletters', 'marketing', 'promotional', 'advertisement', 'advertisements', 'ad', 'ads',
+          'noreply', 'no-reply', 'donotreply', 'do not reply', 'mailing list', 'mailing lists'
         ],
         priority: 1,
         autoDelete: 1
