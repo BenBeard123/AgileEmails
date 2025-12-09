@@ -189,9 +189,9 @@ class EmailClassifier {
     // Get body early for news detection (but only first few lines for performance)
     const body = email.body?.toLowerCase() || '';
     const bodyPreview = body.split('\n').slice(0, 3).join(' ').toLowerCase();
-    const isNewsSource = this.isNewsSource(from, emailDomain, subject, bodyPreview);
+    const isNews = this.isNewsSource(from, emailDomain, subject, bodyPreview);
     
-    if (isNewsSource) {
+    if (isNews) {
       // Use full body for unsubscribe and breaking news checks
       const fullText = `${subject} ${body}`.toLowerCase();
       const hasUnsubscribe = fullText.includes('unsubscribe') || fullText.includes('unsub');
@@ -336,8 +336,7 @@ class EmailClassifier {
       }
     }
 
-    // Get full text for comprehensive checks
-    const body = email.body?.toLowerCase() || '';
+    // Get full text for comprehensive checks (body already declared above)
     const fullText = `${subject} ${body}`.toLowerCase();
     
     // RULE 1: Check for "unsubscribe" anywhere in email
@@ -404,22 +403,8 @@ class EmailClassifier {
       };
     }
     
-    // RULE 2: Detect news/newsletters (without unsubscribe)
-    const isNewsSource = this.isNewsSource(from, emailDomain, subject, body);
-    if (isNewsSource) {
-      const breakingNewsKeywords = ['breaking news', 'breaking', 'urgent news', 'alert', 'breaking story', 'just in'];
-      const isBreakingNews = breakingNewsKeywords.some(kw => fullText.includes(kw));
-      
-      return {
-        category: 'promo',
-        priority: isBreakingNews ? 2 : 1, // Breaking news = 2, regular news = 1
-        isNewsletter: true,
-        confidence: 15,
-        isNonHuman: false
-      };
-    }
-    
-    // RULE 3: Apply high-priority keyword boost (only if no unsubscribe)
+    // RULE 2: Apply high-priority keyword boost (only if no unsubscribe)
+    // Note: News sources are already checked early and return early, so we don't need to check again here
     if (matchedHighPriorityKeyword) {
       priority = highPriorityBoost;
     }
@@ -657,8 +642,14 @@ class EmailClassifier {
 
   // Check if email is from a news source (newspaper, news website, etc.)
   isNewsSource(from, emailDomain, subject, body) {
+    // FIRST: Check for NYT - any email containing "@nytimes" is from NYT
+    // This catches all 80+ NYT email variations
+    if (from.includes('@nytimes')) {
+      return true;
+    }
+    
     const newsDomains = [
-      'nytimes.com', 'nytimes', 'new york times', 'wsj.com', 'washingtonpost.com', 'usatoday.com',
+      'wsj.com', 'washingtonpost.com', 'usatoday.com',
       'cnn.com', 'bbc.com', 'reuters.com', 'ap.org', 'bloomberg.com',
       'theguardian.com', 'npr.org', 'abc.com', 'cbs.com', 'nbc.com',
       'foxnews.com', 'msnbc.com', 'cnbc.com', 'forbes.com', 'time.com',
@@ -667,8 +658,6 @@ class EmailClassifier {
     
     // Specific news sender addresses (including breaking news addresses)
     const newsSenders = [
-      // New York Times
-      'nytdirect@nytimes.com', 'nytdirect', 'nytimes.com', 'nytimes',
       // Wall Street Journal
       'newsletters@wsj.com', 'wsj.com',
       // CNN
@@ -712,7 +701,7 @@ class EmailClassifier {
     
     const fullText = `${from} ${subject} ${body || ''}`.toLowerCase();
     
-    // Check for specific news sender addresses first (most reliable)
+    // Check for specific news sender addresses (most reliable)
     if (newsSenders.some(sender => from.includes(sender.toLowerCase()))) {
       return true;
     }
