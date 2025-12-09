@@ -665,9 +665,43 @@ class EmailClassifier {
       'news', 'newspaper', 'newsletter', 'breaking', 'alert'
     ];
     
-    // Specific news sender addresses
+    // Specific news sender addresses (including breaking news addresses)
     const newsSenders = [
-      'nytdirect@nytimes.com', 'nytdirect', 'nytimes.com', 'nytimes'
+      // New York Times
+      'nytdirect@nytimes.com', 'nytdirect', 'nytimes.com', 'nytimes',
+      // Wall Street Journal
+      'newsletters@wsj.com', 'wsj.com',
+      // CNN
+      'breakingnews@mail.cnn.com', 'breakingnews@cnn.com', 'cnn.com',
+      // BBC
+      'news@bbc.co.uk', 'bbc.co.uk', 'bbc.com',
+      // Reuters
+      'newsletters@reuters.com', 'reuters.com',
+      // Washington Post
+      'newsletters@washpost.com', 'washingtonpost.com', 'washpost.com',
+      // Fox News
+      'foxnews@e.foxnews.com', 'foxnews.com',
+      // NBC News
+      'breakingnews@news.nbcnews.com', 'nbcnews.com', 'nbc.com',
+      // CBS News
+      'news@cbsnews.com', 'cbsnews.com', 'cbs.com',
+      // ABC News
+      'abcnews@abc.go.com', 'abcnews.com', 'abc.com',
+      // Associated Press
+      'apnews@ap.org', 'ap.org',
+      // Bloomberg
+      'newsletters@bloomberg.com', 'bloomberg.com',
+      // NPR
+      'news@npr.org', 'npr.org',
+      // The Guardian
+      'news@theguardian.com', 'theguardian.com',
+      // USA Today
+      'news@usatoday.com', 'usatoday.com',
+      // Other major outlets
+      'newsletters@latimes.com', 'latimes.com',
+      'newsletters@politico.com', 'politico.com',
+      'newsletters@axios.com', 'axios.com',
+      'newsletters@theatlantic.com', 'theatlantic.com'
     ];
     
     const newsKeywords = [
