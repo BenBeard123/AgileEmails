@@ -185,6 +185,30 @@ class EmailClassifier {
       };
     }
 
+    // EARLY CHECK: Detect news sources before classification (to prevent misclassification)
+    // Get body early for news detection (but only first few lines for performance)
+    const body = email.body?.toLowerCase() || '';
+    const bodyPreview = body.split('\n').slice(0, 3).join(' ').toLowerCase();
+    const isNewsSource = this.isNewsSource(from, emailDomain, subject, bodyPreview);
+    
+    if (isNewsSource) {
+      // Use full body for unsubscribe and breaking news checks
+      const fullText = `${subject} ${body}`.toLowerCase();
+      const hasUnsubscribe = fullText.includes('unsubscribe') || fullText.includes('unsub');
+      
+      // Check for breaking news keywords
+      const breakingNewsKeywords = ['breaking news', 'breaking', 'urgent news', 'alert', 'breaking story', 'just in'];
+      const isBreakingNews = breakingNewsKeywords.some(kw => fullText.includes(kw));
+      
+      return {
+        category: 'promo',
+        priority: isBreakingNews ? 2 : 1, // Breaking news = 2, regular news = 1
+        isNewsletter: true,
+        confidence: 20,
+        isNonHuman: false
+      };
+    }
+
     // Try classification with subject + sender only (FAST PATH)
     const quickResult = this.classifyWithText(from, subject, '', emailDomain, senderName);
     if (quickResult.score >= CONFIDENCE_THRESHOLD) {
@@ -634,32 +658,57 @@ class EmailClassifier {
   // Check if email is from a news source (newspaper, news website, etc.)
   isNewsSource(from, emailDomain, subject, body) {
     const newsDomains = [
-      'nytimes.com', 'wsj.com', 'washingtonpost.com', 'usatoday.com',
+      'nytimes.com', 'nytimes', 'new york times', 'wsj.com', 'washingtonpost.com', 'usatoday.com',
       'cnn.com', 'bbc.com', 'reuters.com', 'ap.org', 'bloomberg.com',
       'theguardian.com', 'npr.org', 'abc.com', 'cbs.com', 'nbc.com',
       'foxnews.com', 'msnbc.com', 'cnbc.com', 'forbes.com', 'time.com',
       'news', 'newspaper', 'newsletter', 'breaking', 'alert'
     ];
     
-    const newsKeywords = [
-      'newsletter', 'daily news', 'breaking news', 'news update',
-      'morning briefing', 'evening briefing', 'news digest', 'news roundup'
+    // Specific news sender addresses
+    const newsSenders = [
+      'nytdirect@nytimes.com', 'nytdirect', 'nytimes.com', 'nytimes'
     ];
     
-    const fullText = `${from} ${subject} ${body}`.toLowerCase();
+    const newsKeywords = [
+      'newsletter', 'daily news', 'breaking news', 'news update',
+      'morning briefing', 'evening briefing', 'news digest', 'news roundup',
+      'the new york times', 'new york times', 'ny times'
+    ];
     
-    // Check domain
-    if (newsDomains.some(domain => emailDomain.includes(domain))) {
+    const fullText = `${from} ${subject} ${body || ''}`.toLowerCase();
+    
+    // Check for specific news sender addresses first (most reliable)
+    if (newsSenders.some(sender => from.includes(sender.toLowerCase()))) {
       return true;
     }
     
-    // Check keywords in subject or body
-    if (newsKeywords.some(kw => fullText.includes(kw))) {
+    // Check domain (more comprehensive check)
+    if (newsDomains.some(domain => {
+      const lowerDomain = domain.toLowerCase();
+      return emailDomain.includes(lowerDomain) || 
+             emailDomain.endsWith('.' + lowerDomain) ||
+             emailDomain === lowerDomain ||
+             from.includes(lowerDomain);
+    })) {
+      return true;
+    }
+    
+    // Check keywords in subject, body, or sender
+    if (newsKeywords.some(kw => fullText.includes(kw.toLowerCase()))) {
       return true;
     }
     
     // Check sender name for news-related terms
-    if (from.includes('news') || from.includes('newsletter') || from.includes('breaking')) {
+    if (from.includes('news') || from.includes('newsletter') || from.includes('breaking') ||
+        from.includes('nytimes') || from.includes('ny times') || from.includes('new york times') ||
+        from.includes('nytdirect')) {
+      return true;
+    }
+    
+    // Check subject for news source indicators
+    if (subject.includes('the new york times') || subject.includes('ny times') || 
+        subject.includes('nytimes') || subject.includes('newsletter')) {
       return true;
     }
     
