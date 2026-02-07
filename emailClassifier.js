@@ -117,6 +117,10 @@ class EmailClassifier {
       'time sensitive', 'time-sensitive', 'expires today', 'expiring today',
       'critical', 'emergency', 'emergencies', 'asap', 'rush', 'hurry'
     ];
+    this.strongUrgentKeywords = [
+      'urgent', 'asap', 'immediately', 'right away', 'due today', 'due now',
+      'expires today', 'expiring today', 'critical', 'emergency', 'emergencies'
+    ];
     this.importantKeywords = [
       'important', 'priority', 'attention', 'required', 'must', 'need', 'needed',
       'please respond', 'please reply', 'response needed', 'reply needed',
@@ -433,6 +437,7 @@ class EmailClassifier {
 
     // Adjust priority based on urgency (subject only for speed)
     const subjectUrgent = this.urgentKeywords.some(kw => subject.includes(kw.toLowerCase()));
+    const subjectStrongUrgent = this.strongUrgentKeywords.some(kw => subject.includes(kw.toLowerCase()));
     const subjectImportant = this.importantKeywords.some(kw => subject.includes(kw.toLowerCase()));
     
     // Automated/non-human emails should always be priority 1 (low urgency for replies)
@@ -440,14 +445,16 @@ class EmailClassifier {
       priority = 1;
     } else if (!matchedHighPriorityKeyword) {
       // Only apply these rules if we haven't already set priority via high-priority keywords
-      // Personalized emails without unsubscribe get priority 4 minimum
-      if (isPersonalized && priority < 4) {
-        priority = 4;
+      // Personalized emails without unsubscribe get priority 3 minimum
+      if (isPersonalized && priority < 3) {
+        priority = 3;
       }
       
-      // Urgent keywords can boost to 5, but maintain distribution for others
-      if (subjectUrgent) {
-        priority = 5; // Urgent always gets highest priority
+      // Urgent keywords can boost priority, but reserve 5 for strong urgency
+      if (subjectStrongUrgent) {
+        priority = Math.max(5, priority);
+      } else if (subjectUrgent) {
+        priority = Math.max(4, priority);
       } else if (subjectImportant) {
         // Important keywords boost by 1, but cap at 4 to maintain distribution
         priority = Math.min(4, priority + 1);
@@ -780,8 +787,8 @@ class EmailClassifier {
   }
 
   mapImportanceScoreToPriority(score) {
-    if (score >= 12) return 5;
-    if (score >= 9) return 4;
+    if (score >= 14) return 5;
+    if (score >= 10) return 4;
     if (score >= 6) return 3;
     if (score >= 3) return 2;
     return 1;
