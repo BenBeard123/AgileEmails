@@ -153,8 +153,14 @@ function init() {
   // Reuse mainArea declared earlier (line 77)
   mainArea.addEventListener('mouseover', (e) => {
     try {
+      if (!(e.target instanceof Element)) {
+        return;
+      }
       const emailRow = e.target.closest('tr[role="row"]');
-      if (emailRow && !emailRow.querySelector('.agileemails-overlay')) {
+      if (!emailRow || !document.body.contains(emailRow) || typeof emailRow.querySelector !== 'function') {
+        return;
+      }
+      if (!emailRow.querySelector('.agileemails-overlay')) {
         const emailId = emailRow.getAttribute('data-agileemails-id') ||
                        emailRow.getAttribute('data-thread-perm-id');
         if (emailId && emailCache && typeof emailCache.has === 'function' && emailCache.has(emailId)) {
@@ -737,11 +743,23 @@ function reapplyOverlays() {
   isReapplyingOverlays = true;
   
   try {
+    if (document.visibilityState === 'hidden') {
+      isReapplyingOverlays = false;
+      return;
+    }
+    if (!chrome?.storage?.local) {
+      console.warn('AgileEmails: chrome.storage.local unavailable, skipping reapply');
+      isReapplyingOverlays = false;
+      return;
+    }
     // Cache settings to avoid frequent storage calls
     const now = Date.now();
     if (!overlaySettingsCache || now - lastSettingsFetch > 5000) {
       chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
         try {
+          if (chrome.runtime?.lastError) {
+            throw chrome.runtime.lastError;
+          }
           overlaySettingsCache = data;
           lastSettingsFetch = now;
           doReapplyOverlays(data);
@@ -774,9 +792,13 @@ function doReapplyOverlays(settings) {
     // Get all email rows currently visible
     const emailRows = document.querySelectorAll('tr[role="row"]');
     const rowsToProcess = [];
+    if (!emailRows || emailRows.length === 0 || !document.body) {
+      return;
+    }
     
     emailRows.forEach(row => {
       try {
+        if (!(row instanceof Element)) return;
         // Skip if row is not visible
         if (row.offsetParent === null) return;
         
