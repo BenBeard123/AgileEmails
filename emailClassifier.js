@@ -338,6 +338,15 @@ class EmailClassifier {
 
     // Get full text for comprehensive checks (body already declared above)
     const fullText = `${subject} ${body}`.toLowerCase();
+    const formulaResult = this.calculateImportanceScore({
+      from,
+      subject,
+      body,
+      emailDomain,
+      senderName,
+      category: bestCategory
+    });
+    const formulaPriority = this.mapImportanceScoreToPriority(formulaResult.score);
     
     // RULE 1: Check for "unsubscribe" anywhere in email
     const hasUnsubscribe = fullText.includes('unsubscribe') || fullText.includes('unsub');
@@ -417,6 +426,11 @@ class EmailClassifier {
                           bestCategory !== 'promo' &&
                           bestCategory !== 'auth-codes';
     
+    // Apply formula-based priority as a baseline
+    if (!matchedHighPriorityKeyword) {
+      priority = Math.max(priority, formulaPriority);
+    }
+
     // Adjust priority based on urgency (subject only for speed)
     const subjectUrgent = this.urgentKeywords.some(kw => subject.includes(kw.toLowerCase()));
     const subjectImportant = this.importantKeywords.some(kw => subject.includes(kw.toLowerCase()));
@@ -736,6 +750,130 @@ class EmailClassifier {
     }
     
     return false;
+  }
+
+  calculateImportanceScore({ from, subject, body, emailDomain, senderName, category }) {
+    const fullText = `${from} ${subject} ${body}`.toLowerCase();
+
+    const actionRequired = this.getActionRequiredScore(fullText);
+    const deadlineProximity = this.getDeadlineProximityScore(fullText);
+    const consequenceSeverity = this.getConsequenceSeverityScore(fullText, category);
+    const senderAuthority = this.getSenderAuthorityScore(fullText, emailDomain, senderName);
+    const blockingStatus = this.getBlockingStatusScore(fullText);
+
+    const score = (actionRequired * 2) +
+      (deadlineProximity * 2) +
+      (consequenceSeverity * 3) +
+      (senderAuthority * 1) +
+      (blockingStatus * 2);
+
+    return {
+      score,
+      signals: {
+        actionRequired,
+        deadlineProximity,
+        consequenceSeverity,
+        senderAuthority,
+        blockingStatus
+      }
+    };
+  }
+
+  mapImportanceScoreToPriority(score) {
+    if (score >= 12) return 5;
+    if (score >= 9) return 4;
+    if (score >= 6) return 3;
+    if (score >= 3) return 2;
+    return 1;
+  }
+
+  getActionRequiredScore(text) {
+    const actionKeywords = [
+      'action required', 'action needed', 'please respond', 'please reply',
+      'response needed', 'reply needed', 'approval needed', 'approve',
+      'confirm', 'confirmation', 'rsvp', 'submit', 'submission', 'fill out',
+      'sign', 'signature', 'payment', 'pay', 'invoice', 'schedule', 'book',
+      'meeting request', 'calendar invite'
+    ];
+    if (actionKeywords.some(kw => text.includes(kw))) {
+      return 1;
+    }
+    return text.includes('?') ? 1 : 0;
+  }
+
+  getDeadlineProximityScore(text) {
+    const urgentKeywords = [
+      'today', 'tonight', 'asap', 'urgent', 'immediately', 'eod', 'end of day',
+      'deadline', 'due today', 'due now', 'expires today'
+    ];
+    const soonKeywords = [
+      'tomorrow', 'this week', 'by monday', 'by tuesday', 'by wednesday',
+      'by thursday', 'by friday', 'by saturday', 'by sunday', 'next week',
+      'due this week'
+    ];
+    if (urgentKeywords.some(kw => text.includes(kw))) {
+      return 2;
+    }
+    if (soonKeywords.some(kw => text.includes(kw))) {
+      return 1;
+    }
+    return 0;
+  }
+
+  getConsequenceSeverityScore(text, category) {
+    const highSeverityKeywords = [
+      'overdue', 'past due', 'payment due', 'account locked', 'suspended',
+      'fraud', 'security alert', 'breach', 'incident', 'outage',
+      'legal', 'court', 'chargeback'
+    ];
+    const mediumSeverityKeywords = [
+      'assignment', 'exam', 'final', 'midterm', 'grade', 'gpa',
+      'invoice', 'payment', 'billing', 'contract', 'production',
+      'downtime', 'error', 'failure'
+    ];
+
+    if (highSeverityKeywords.some(kw => text.includes(kw))) {
+      return 3;
+    }
+    if (category === 'finance' || category === 'work-current' || category === 'school') {
+      return 2;
+    }
+    if (mediumSeverityKeywords.some(kw => text.includes(kw))) {
+      return 2;
+    }
+    return 0;
+  }
+
+  getSenderAuthorityScore(text, emailDomain, senderName) {
+    const highAuthorityKeywords = [
+      'ceo', 'cto', 'cfo', 'vp', 'vice president', 'director', 'head of',
+      'manager', 'lead', 'principal', 'professor', 'dean', 'president'
+    ];
+    const mediumAuthorityKeywords = [
+      'hr', 'admin', 'support', 'team', 'boss', 'supervisor'
+    ];
+
+    if (emailDomain && (emailDomain.endsWith('.edu') || emailDomain.includes('school'))) {
+      return 2;
+    }
+    if (this.categories?.finance?.domains?.some(d => emailDomain?.includes(d))) {
+      return 2;
+    }
+    if (highAuthorityKeywords.some(kw => text.includes(kw) || senderName.includes(kw))) {
+      return 2;
+    }
+    if (mediumAuthorityKeywords.some(kw => text.includes(kw) || senderName.includes(kw))) {
+      return 1;
+    }
+    return 0;
+  }
+
+  getBlockingStatusScore(text) {
+    const blockingKeywords = [
+      'blocked', 'blocking', 'waiting on you', 'pending your',
+      'need your approval', 'stuck until', 'cannot proceed', 'can\'t proceed'
+    ];
+    return blockingKeywords.some(kw => text.includes(kw)) ? 1 : 0;
   }
 
   adjustPriorityByHistory(email, currentPriority) {
