@@ -34,12 +34,16 @@ function setupTabs() {
 
       if (targetTab === 'categories') {
         loadCategories();
+      } else if (targetTab === 'priority') {
+        loadPriorityTopics();
       } else if (targetTab === 'dnd') {
         loadDNDRules();
       } else if (targetTab === 'auto-delete') {
         loadAutoDeleteSettings();
-      } else if (targetTab === 'general') {
+      } else       if (targetTab === 'general') {
         loadGeneralSettings();
+      } else if (targetTab === 'overrides') {
+        loadCategoryOverrides();
       }
     });
   });
@@ -67,6 +71,7 @@ function setupEventListeners() {
 
     // Categories
     const saveCategoriesBtn = document.getElementById('saveCategories');
+    const savePriorityTopicsBtn = document.getElementById('savePriorityTopics');
     const addDNDRuleBtn = document.getElementById('addDNDRule');
     const saveDNDRulesBtn = document.getElementById('saveDNDRules');
     const saveAutoDeleteBtn = document.getElementById('saveAutoDelete');
@@ -75,8 +80,19 @@ function setupEventListeners() {
     if (saveCategoriesBtn) {
       saveCategoriesBtn.addEventListener('click', saveCategories);
     }
+    if (savePriorityTopicsBtn) {
+      savePriorityTopicsBtn.addEventListener('click', savePriorityTopics);
+    }
     if (addDNDRuleBtn) {
       addDNDRuleBtn.addEventListener('click', addDNDRule);
+    }
+    const clearOverridesBtn = document.getElementById('clearOverrides');
+    if (clearOverridesBtn) {
+      clearOverridesBtn.addEventListener('click', () => {
+        if (confirm('Remove all category overrides?')) {
+          chrome.storage.local.set({ categoryOverrides: {} }, () => loadCategoryOverrides());
+        }
+      });
     }
     if (saveDNDRulesBtn) {
       saveDNDRulesBtn.addEventListener('click', saveDNDRules);
@@ -95,9 +111,79 @@ function setupEventListeners() {
 function loadSettings() {
   updatePricingUI();
   loadCategories();
+  loadPriorityTopics();
   loadDNDRules();
   loadAutoDeleteSettings();
   loadGeneralSettings();
+  loadCategoryOverrides();
+}
+
+function escapeHtml(str) {
+  if (str == null) return '';
+  const s = String(str);
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function loadCategoryOverrides() {
+  chrome.storage.local.get(['categoryOverrides', 'categories'], (data) => {
+    const overrides = data.categoryOverrides || {};
+    const categories = data.categories || {};
+    const listEl = document.getElementById('overridesList');
+    const emptyEl = document.getElementById('overridesEmpty');
+    if (!listEl || !emptyEl) return;
+
+    const entries = Object.entries(overrides);
+    const clearBtn = document.getElementById('clearOverrides');
+    if (entries.length === 0) {
+      listEl.innerHTML = '';
+      emptyEl.style.display = 'block';
+      if (clearBtn) clearBtn.style.display = 'none';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    if (clearBtn) clearBtn.style.display = 'inline-block';
+    listEl.innerHTML = entries.map(([threadId, category]) => {
+      const color = escapeHtml(categories[category]?.color || '#808080');
+      const label = escapeHtml((category || '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
+      const shortId = escapeHtml(threadId.length > 20 ? threadId.slice(0, 17) + '...' : threadId);
+      const safeThreadId = escapeHtml(threadId);
+      return `
+        <div class="override-item">
+          <span class="override-badge" style="background-color: ${color}">${label}</span>
+          <span class="override-id" title="${safeThreadId}">${shortId}</span>
+          <button type="button" class="remove-override" data-thread-id="${safeThreadId}">Remove</button>
+        </div>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('.remove-override').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tid = btn.getAttribute('data-thread-id');
+        const next = { ...overrides };
+        delete next[tid];
+        chrome.storage.local.set({ categoryOverrides: next }, () => loadCategoryOverrides());
+      });
+    });
+  });
+}
+
+function loadPriorityTopics() {
+  chrome.storage.local.get(['priorityTopics'], (data) => {
+    const topics = data.priorityTopics || [];
+    document.querySelectorAll('#priorityTopicsList input[data-topic]').forEach(cb => {
+      cb.checked = topics.includes(cb.getAttribute('data-topic'));
+    });
+  });
+}
+
+function savePriorityTopics() {
+  const topics = [];
+  document.querySelectorAll('#priorityTopicsList input[data-topic]:checked').forEach(cb => {
+    topics.push(cb.getAttribute('data-topic'));
+  });
+  chrome.storage.local.set({ priorityTopics: topics }, () => {
+    alert('Priority topics saved!');
+  });
 }
 
 function updatePricingUI() {

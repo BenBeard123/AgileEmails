@@ -44,7 +44,7 @@ class EmailClassifier {
           // Highest priority: interviews, applications, job openings
           'interview', 'interviews', 'apply now', 'application', 'applications', 'job opening', 'job openings', 'job opportunity', 'job opportunities',
           // High priority: recruiters, hiring, positions
-          'recruiter', 'recruiters', 'hiring', 'we are hiring', 'we\'re hiring', 'hiring now', 'position', 'positions', 'job', 'jobs',
+          'recruiter', 'recruiters', 'hiring', 'we are hiring', 'we\'re hiring', 'hiring now', 'position', 'positions',
           // Medium priority: career, opportunity
           'opportunity', 'opportunities', 'career', 'careers', 'resume', 'resumes', 'cv', 'cvs', 'curriculum vitae',
           // Lower priority: job sites, general terms
@@ -128,7 +128,21 @@ class EmailClassifier {
     ];
   }
 
-  classifyEmail(email) {
+  classifyEmail(email, options = {}) {
+    const categoryOverrides = options.categoryOverrides || {};
+    const overrideCategory = email.id ? categoryOverrides[email.id] : null;
+    if (overrideCategory && typeof overrideCategory === 'string' && this.categories?.[overrideCategory]) {
+      const config = this.categories[overrideCategory];
+      const priority = config?.priority ?? 3;
+      return {
+        category: overrideCategory,
+        priority,
+        isNewsletter: false,
+        confidence: 25,
+        isUserOverride: true
+      };
+    }
+
     const from = email.from?.toLowerCase() || '';
     const subject = email.subject?.toLowerCase() || '';
     const emailDomain = from.split('@')[1]?.toLowerCase() || '';
@@ -476,6 +490,8 @@ class EmailClassifier {
 
     priority = this.adjustPriorityByHistory(email, priority);
 
+    bestCategory = this.applyContextOverrides(bestCategory, subject, body, from, emailDomain);
+
     // Ensure non-human emails are always priority 1
     const finalPriority = (email.isNonHuman || bestCategory === 'other') 
       ? 1 
@@ -490,6 +506,19 @@ class EmailClassifier {
     };
   }
 
+  matchesWord(text, kw) {
+    if (!text || !kw) return false;
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+  }
+
+  getRankWeight(index, total) {
+    const pct = index / total;
+    if (pct < 0.2) return 5;
+    if (pct < 0.5) return 3;
+    return 2;
+  }
+
   // Fast classification using only provided text (subject + optional body lines)
   classifyWithText(from, subject, bodyText, emailDomain, senderName) {
     let bestCategory = 'other';
@@ -502,69 +531,55 @@ class EmailClassifier {
       if (category === 'auth-codes' || category === 'promo') continue;
       
       let score = 0;
-      let bestMatchedRank = Infinity; // Track the best (lowest) rank of matched keywords
+      let bestMatchedRank = Infinity;
+      let hasKeywordMatch = false;
 
-      // Check domains first (strongest signal, no body needed)
+      // Check domains first
+      let domainMatch = false;
       if (config.domains && config.domains.length > 0) {
-        const domainMatch = config.domains.some(d => {
+        domainMatch = config.domains.some(d => {
           const lowerD = d.toLowerCase();
           return emailDomain.includes(lowerD) || emailDomain.endsWith('.' + lowerD) || emailDomain === lowerD;
         });
         if (domainMatch) {
-          score += 10; // Domain match is very strong
-          bestMatchedRank = 0; // Domain match is highest priority
+          const isBroadDomain = category === 'school';
+          if (isBroadDomain) {
+            score += 3; // Weak until we see a keyword
+          } else {
+            score += 10;
+            bestMatchedRank = 0;
+          }
         }
       }
 
-      // Check keywords with rank-based scoring (earlier in list = more important)
+      // Check keywords with rank-based scoring (subject and body get same weights 5/3/2)
       if (config.keywords && Array.isArray(config.keywords) && config.keywords.length > 0) {
         config.keywords.forEach((kw, index) => {
           if (!kw || typeof kw !== 'string') return;
           const lowerKw = kw.toLowerCase();
-          let matched = false;
-          let rankWeight = 0;
+          const rankWeight = this.getRankWeight(index, config.keywords.length);
 
-          // Subject matches (highest weight, and check rank)
-          if (subject.includes(lowerKw)) {
-            matched = true;
-            // Earlier keywords (lower index) get higher weight
-            // First 20% of keywords = 5x, next 30% = 3x, rest = 2x
-            const keywordPercent = index / config.keywords.length;
-            if (keywordPercent < 0.2) {
-              rankWeight = 5;
-            } else if (keywordPercent < 0.5) {
-              rankWeight = 3;
-            } else {
-              rankWeight = 2;
-            }
+          if (this.matchesWord(subject, lowerKw)) {
+            hasKeywordMatch = true;
             score += rankWeight;
-            if (index < bestMatchedRank) {
-              bestMatchedRank = index;
-            }
+            if (index < bestMatchedRank) bestMatchedRank = index;
           }
-
-          // Sender name matches (medium weight)
-          if (senderName.includes(lowerKw)) {
-            matched = true;
-            const keywordPercent = index / config.keywords.length;
-            const rankWeight = keywordPercent < 0.3 ? 2 : 1;
-            score += rankWeight;
-            if (index < bestMatchedRank) {
-              bestMatchedRank = index;
-            }
+          if (this.matchesWord(senderName, lowerKw)) {
+            hasKeywordMatch = true;
+            score += (index / config.keywords.length < 0.3 ? 2 : 1);
+            if (index < bestMatchedRank) bestMatchedRank = index;
           }
-
-          // Body matches (lower weight, only if provided)
-          if (bodyText && bodyText.includes(lowerKw)) {
-            matched = true;
-            const keywordPercent = index / config.keywords.length;
-            const rankWeight = keywordPercent < 0.3 ? 2 : 1;
-            score += rankWeight;
-            if (index < bestMatchedRank) {
-              bestMatchedRank = index;
-            }
+          if (bodyText && this.matchesWord(bodyText, lowerKw)) {
+            hasKeywordMatch = true;
+            score += rankWeight; // Body same weight as subject (5/3/2)
+            if (index < bestMatchedRank) bestMatchedRank = index;
           }
         });
+
+        if (domainMatch && category === 'school' && hasKeywordMatch) {
+          score += 7; // Full domain bonus when we have keyword
+          if (bestMatchedRank === Infinity) bestMatchedRank = 0;
+        }
       }
 
       if (score > bestScore || (score === bestScore && bestMatchedRank < bestKeywordRank)) {
@@ -849,8 +864,13 @@ class EmailClassifier {
     if (lowConsequenceKeywords.some(kw => text.includes(kw))) {
       return 0;
     }
-    if (category === 'finance' || category === 'work-current' || category === 'school') {
+    if (category === 'finance' || category === 'work-current') {
       return 2;
+    }
+    // school: only boost when content suggests actual academic consequence (assignments, grades, etc.)
+    if (category === 'school') {
+      const academicSignals = ['assignment', 'homework', 'grade', 'exam', 'deadline', 'due date', 'submission', 'professor', 'syllabus'];
+      return academicSignals.some(kw => text.includes(kw)) ? 2 : 1;
     }
     if (mediumSeverityKeywords.some(kw => text.includes(kw))) {
       return 2;
@@ -867,7 +887,11 @@ class EmailClassifier {
       'hr', 'admin', 'support', 'team', 'boss', 'supervisor'
     ];
 
-    if (emailDomain && (emailDomain.endsWith('.edu') || emailDomain.includes('school'))) {
+    // .edu/school: only boost when content suggests actual academic importance.
+    // Not every .edu email is important (alumni, newsletters, marketing, events, etc.)
+    const academicSignals = ['assignment', 'homework', 'grade', 'professor', 'syllabus', 'exam', 'course', 'class', 'lecture', 'deadline', 'due date', 'submission'];
+    const hasAcademicSignal = academicSignals.some(kw => text.includes(kw));
+    if (emailDomain && (emailDomain.endsWith('.edu') || emailDomain.includes('school')) && hasAcademicSignal) {
       return 2;
     }
     if (this.categories?.finance?.domains?.some(d => emailDomain?.includes(d))) {
@@ -888,6 +912,54 @@ class EmailClassifier {
       'need your approval', 'stuck until', 'cannot proceed', 'can\'t proceed'
     ];
     return blockingKeywords.some(kw => text.includes(kw)) ? 1 : 0;
+  }
+
+  applyContextOverrides(category, subject, body, from, emailDomain) {
+    const sub = (subject || '').toLowerCase();
+    const bod = (body || '').toLowerCase();
+    const full = `${sub} ${bod}`;
+
+    if (['work-current', 'school', 'finance', 'personal'].includes(category)) {
+      const promoSignals = ['unsubscribe', 'manage preferences', 'view in browser', 'email preferences'];
+      if (promoSignals.some(s => bod.includes(s))) {
+        return 'promo';
+      }
+    }
+
+    // .edu/school: demote when content suggests non-academic (alumni, marketing, events, etc.)
+    if (category === 'school' && emailDomain && (emailDomain.includes('edu') || emailDomain.includes('school'))) {
+      const nonAcademicSignals = ['alumni', 'newsletter', 'donate', 'donation', 'fundraiser', 'fundraising', 'marketing', 'upcoming event', 'events', 'campus store', 'bookstore', 'career fair', 'networking'];
+      if (nonAcademicSignals.some(s => bod.includes(s) || sub.includes(s))) {
+        return 'promo';
+      }
+    }
+
+    if (category === 'work-current') {
+      const schoolSignals = ['assignment', 'homework', 'grade', 'professor', 'syllabus', 'exam'];
+      if (schoolSignals.some(s => full.includes(s))) {
+        return 'school';
+      }
+    }
+
+    if (category === 'work-opportunities') {
+      const workCurrentSignals = ['standup', 'sprint', 'pr review', 'merge', 'deploy', '1:1'];
+      const workOppSignals = ['interview', 'recruiter', 'job opening', 'application'];
+      if (workCurrentSignals.some(s => full.includes(s)) && !workOppSignals.some(s => full.includes(s))) {
+        return 'work-current';
+      }
+    }
+
+    if (category === 'finance') {
+      if ((sub.includes('invoice') || sub.includes('receipt')) && /shop|sale|discount/.test(bod)) {
+        return 'promo';
+      }
+    }
+
+    if (/weekly digest|daily digest/.test(sub)) {
+      return 'promo';
+    }
+
+    return category;
   }
 
   adjustPriorityByHistory(email, currentPriority) {

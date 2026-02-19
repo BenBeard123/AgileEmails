@@ -26,39 +26,49 @@ async function scheduleProcessEmailsAlarm() {
   }
 }
 
-// On install: initialize storage + create alarms
+// On install: initialize storage + create alarms (only on first install, not update)
 chrome.runtime.onInstalled.addListener(async (details) => {
   try {
     console.log('AgileEmails: onInstalled triggered', details.reason);
-    
-    // Initialize storage
-    try {
-      await chrome.storage.local.set({
-        categories: {
-          'school': { enabled: true, color: '#4A90E2', autoDelete: null },
-          'work-current': { enabled: true, color: '#E24A4A', autoDelete: null },
-          'work-opportunities': { enabled: true, color: '#E2A44A', autoDelete: null },
-          'finance': { enabled: true, color: '#4AE24A', autoDelete: null },
-          'personal': { enabled: true, color: '#E24AE2', autoDelete: null },
-          'auth-codes': { enabled: true, color: '#A4A4A4', autoDelete: 1 },
-          'promo': { enabled: true, color: '#FFB84D', autoDelete: 1 },
-          'other': { enabled: true, color: '#808080', autoDelete: null }
-        },
-        dndRules: [],
-        pricingTier: 'free',
-        settings: {
-          contextWindow: 7, // days
-          autoDeleteOldEmails: true,
-          autoDeleteThresholds: {
-            '3months': false,
-            '6months': false,
-            '1year': true
-          }
-        }
-      });
-      console.log('AgileEmails: Storage initialized successfully');
-    } catch (storageError) {
-      console.error('AgileEmails: Error initializing storage', storageError);
+
+    if (details.reason === 'install') {
+      // Initialize storage only on first install
+      try {
+        await chrome.storage.local.set({
+          categories: {
+            'school': { enabled: true, color: '#4A90E2', autoDelete: null },
+            'work-current': { enabled: true, color: '#E24A4A', autoDelete: null },
+            'work-opportunities': { enabled: true, color: '#E2A44A', autoDelete: null },
+            'finance': { enabled: true, color: '#4AE24A', autoDelete: null },
+            'personal': { enabled: true, color: '#E24AE2', autoDelete: null },
+            'auth-codes': { enabled: true, color: '#A4A4A4', autoDelete: 1 },
+            'promo': { enabled: true, color: '#FFB84D', autoDelete: 1 },
+            'other': { enabled: true, color: '#808080', autoDelete: null }
+          },
+          dndRules: [],
+          pricingTier: 'free',
+          settings: {
+            contextWindow: 7, // days
+            autoDeleteOldEmails: true,
+            autoDeleteThresholds: {
+              '3months': false,
+              '6months': false,
+              '1year': true
+            }
+          },
+          priorityTopics: [],
+          categoryOverrides: {}
+        });
+        console.log('AgileEmails: Storage initialized successfully');
+      } catch (storageError) {
+        console.error('AgileEmails: Error initializing storage', storageError);
+      }
+    } else if (details.reason === 'update') {
+      // On update: ensure categoryOverrides exists without overwriting
+      const existing = await chrome.storage.local.get(['categoryOverrides']);
+      if (existing.categoryOverrides === undefined) {
+        await chrome.storage.local.set({ categoryOverrides: {} });
+      }
     }
 
     // Schedule alarm safely

@@ -223,7 +223,7 @@ async function processGmailPage() {
   
   try {
     const data = await new Promise((resolve) => {
-      chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], resolve);
+      chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier', 'priorityTopics', 'categoryOverrides'], resolve);
     });
     
     const emails = extractEmails();
@@ -352,8 +352,10 @@ async function processEmail(email, settings) {
     const isNonHuman = classifier.isNonHumanEmail(email);
     email.isNonHuman = isNonHuman; // Add to email object for classifier
     
-    // Classify email
-    const classification = classifier.classifyEmail(email);
+    // Classify email (check user overrides first)
+    const classification = classifier.classifyEmail(email, {
+      categoryOverrides: settings.categoryOverrides || {}
+    });
     
     // Check DND rules
     const isDND = classifier.checkDNDRules(email, settings.dndRules || []);
@@ -365,6 +367,12 @@ async function processEmail(email, settings) {
     let finalPriority = classification.priority;
     if (isNonHuman || classification.isNonHuman || classification.category === 'other') {
       finalPriority = 1;
+    }
+    
+    // Apply priority topics boost (user-selected categories get +1)
+    const priorityTopics = settings.priorityTopics || [];
+    if (priorityTopics.includes(classification.category) && finalPriority < 5) {
+      finalPriority = Math.min(5, finalPriority + 1);
     }
     
     const emailData = {
@@ -530,7 +538,7 @@ function applyVisualIndicators(emails, settings) {
       // Add category badge
       if (settings.settings?.showCategoryBadges !== false) {
         const categoryColor = settings.categories?.[data.category]?.color || '#808080';
-        const categoryName = data.category.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        const categoryName = (data.category || 'other').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         overlayHTML += `
           <div class="agileemails-category-badge" style="background-color: ${categoryColor}">
             ${categoryName}
@@ -563,12 +571,23 @@ function applyVisualIndicators(emails, settings) {
       if (data.isDND) {
         overlayHTML += '<span class="agileemails-dnd-badge">🔕 DND</span>';
       }
-      
+      overlayHTML += `<button type="button" class="agileemails-fix-btn" data-email-id="${(data.id || '').replace(/"/g, '&quot;')}" title="Correct category">Fix</button>`;
+
       overlay.innerHTML = overlayHTML;
       overlay.setAttribute('data-email-id', data.id); // Mark overlay with email ID
       
       // Store email ID on the element for easier lookup
       element.setAttribute('data-agileemails-id', data.id);
+
+      // Fix button: correct category
+      const fixBtn = overlay.querySelector('.agileemails-fix-btn');
+      if (fixBtn) {
+        fixBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          showCategoryPicker(data.id, element, settings);
+        });
+      }
       
       // Insert priority indicator on the left side, in front of sender's name
       // Find the sender element (where the sender name is displayed)
@@ -675,6 +694,76 @@ function applyVisualIndicators(emails, settings) {
       reapplyOverlays();
     }, 100);
   }
+}
+
+function showCategoryPicker(threadId, element, settings) {
+  if (!element || !document.body.contains(element)) return;
+  const existing = document.getElementById('agileemails-category-picker');
+  if (existing) existing.remove();
+
+  const categories = settings.categories || {};
+  const categoryKeys = Object.keys(categories).filter(k => categories[k]?.enabled !== false);
+  if (categoryKeys.length === 0) return;
+
+  const picker = document.createElement('div');
+  picker.id = 'agileemails-category-picker';
+  picker.className = 'agileemails-category-picker';
+  const escapeAttr = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const safeColor = (c) => {
+    const s = String(c ?? '').trim();
+    if (!s || /[<>"'`;\\]/.test(s)) return '#808080';
+    return s;
+  };
+  picker.innerHTML = categoryKeys.map(cat => {
+    const color = safeColor(categories[cat]?.color) || '#808080';
+    const label = escapeAttr(cat.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
+    return `<button type="button" class="agileemails-picker-option" data-category="${escapeAttr(cat)}" style="border-left-color: ${color}">${label}</button>`;
+  }).join('');
+
+  document.body.appendChild(picker);
+  const rect = element.getBoundingClientRect();
+  picker.style.top = `${rect.bottom + 4}px`;
+  picker.style.left = `${Math.min(rect.right - 120, Math.max(8, rect.left))}px`;
+
+  const close = (e) => {
+    if (e && e.target && picker.isConnected && picker.contains(e.target)) return;
+    document.removeEventListener('click', close, { capture: true });
+    if (picker.isConnected) picker.remove();
+  };
+  document.addEventListener('click', close, { capture: true });
+
+  picker.querySelectorAll('.agileemails-picker-option').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const category = btn.getAttribute('data-category');
+      if (!category) return;
+      chrome.storage.local.get(['categoryOverrides'], (data) => {
+        const overrides = data.categoryOverrides || {};
+        overrides[threadId] = category;
+        chrome.storage.local.set({ categoryOverrides: overrides }, () => {
+          if (chrome.runtime.lastError) {
+            close();
+            return;
+          }
+          const cached = emailCache.get(threadId);
+          const priority = classifier?.categories?.[category]?.priority ?? 3;
+          const updatedData = cached
+            ? { ...cached, category, priority }
+            : { id: threadId, category, priority, subject: '', from: '', importantInfo: null, isNewsletter: false, isDND: false };
+          if (cached) {
+            emailCache.set(threadId, updatedData);
+          }
+          chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier', 'categoryOverrides'], (fresh) => {
+            if (element && document.body.contains(element)) {
+              applyOverlayToElement(element, updatedData, fresh);
+            }
+            close();
+          });
+        });
+      });
+    });
+  });
+
 }
 
 function parseGmailDate(dateStr) {
@@ -967,7 +1056,7 @@ function applyOverlayToElement(element, emailData, settings) {
     
     if (settings.settings?.showCategoryBadges !== false) {
       const categoryColor = settings.categories?.[emailData.category]?.color || '#808080';
-      const categoryName = emailData.category.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      const categoryName = (emailData.category || 'other').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       overlayHTML += `
         <div class="agileemails-category-badge" style="background-color: ${categoryColor}">
           ${categoryName}
@@ -998,8 +1087,18 @@ function applyOverlayToElement(element, emailData, settings) {
     if (emailData.isDND) {
       overlayHTML += '<span class="agileemails-dnd-badge">🔕 DND</span>';
     }
-    
+    overlayHTML += `<button type="button" class="agileemails-fix-btn" data-email-id="${(emailData.id || '').replace(/"/g, '&quot;')}" title="Correct category">Fix</button>`;
+
     overlay.innerHTML = overlayHTML;
+
+    const fixBtn = overlay.querySelector('.agileemails-fix-btn');
+    if (fixBtn) {
+      fixBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        showCategoryPicker(emailData.id, element, settings);
+      });
+    }
     
     // Store email ID on element for easier lookup
     element.setAttribute('data-agileemails-id', emailData.id);

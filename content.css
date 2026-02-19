@@ -124,6 +124,50 @@ tr[role="row"].agileemails-dnd {
   pointer-events: none;
 }
 
+/* Fix button - must be clickable (overlay has pointer-events: none) */
+.agileemails-fix-btn {
+  pointer-events: auto !important;
+  margin-left: 4px;
+  padding: 1px 5px;
+  font-size: 9px;
+  border: 1px solid #ccc;
+  border-radius: 2px;
+  background: #f5f5f5;
+  cursor: pointer;
+  color: #555;
+}
+.agileemails-fix-btn:hover {
+  background: #e8e8e8;
+}
+
+/* Category picker dropdown */
+.agileemails-category-picker {
+  position: fixed;
+  z-index: 100001;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  padding: 6px 0;
+  min-width: 140px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.agileemails-picker-option {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  border-left: 3px solid transparent;
+}
+.agileemails-picker-option:hover {
+  background: #f0f0f0;
+}
+
 /* Ensure overlay doesn't interfere with Gmail's layout */
 tr[role="row"]:hover .agileemails-overlay {
   background: rgba(255, 255, 255, 0.98);

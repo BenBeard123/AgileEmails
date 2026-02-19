@@ -15,9 +15,11 @@
     <div class="tabs">
       <button class="tab-btn active" data-tab="pricing">Pricing</button>
       <button class="tab-btn" data-tab="categories">Categories</button>
+      <button class="tab-btn" data-tab="priority">Priority</button>
       <button class="tab-btn" data-tab="dnd">DND Mode</button>
       <button class="tab-btn" data-tab="auto-delete">Auto-Delete</button>
       <button class="tab-btn" data-tab="general">General</button>
+      <button class="tab-btn" data-tab="overrides">Category Overrides</button>
     </div>
 
     <!-- Pricing Tab -->
@@ -84,6 +86,47 @@
           <!-- Categories will be populated by JS -->
         </div>
         <button class="save-btn" id="saveCategories">Save Categories</button>
+      </div>
+    </div>
+
+    <!-- Priority Tab -->
+    <div class="tab-content" id="priority-tab">
+      <div class="section">
+        <h2>Priority Topics</h2>
+        <p class="description">Select topics to boost. Emails in these categories get a +1 priority bump (capped at 5).</p>
+        <div class="priority-topics-list" id="priorityTopicsList">
+          <div class="setting-item">
+            <label>
+              <input type="checkbox" id="priority-work-current" data-topic="work-current">
+              Work / Projects
+            </label>
+          </div>
+          <div class="setting-item">
+            <label>
+              <input type="checkbox" id="priority-school" data-topic="school">
+              School / Academics
+            </label>
+          </div>
+          <div class="setting-item">
+            <label>
+              <input type="checkbox" id="priority-finance" data-topic="finance">
+              Finance / Banking
+            </label>
+          </div>
+          <div class="setting-item">
+            <label>
+              <input type="checkbox" id="priority-work-opportunities" data-topic="work-opportunities">
+              Job Applications
+            </label>
+          </div>
+          <div class="setting-item">
+            <label>
+              <input type="checkbox" id="priority-personal" data-topic="personal">
+              Personal / Family
+            </label>
+          </div>
+        </div>
+        <button class="save-btn" id="savePriorityTopics">Save Priority Topics</button>
       </div>
     </div>
 
@@ -182,6 +225,19 @@
         </div>
 
         <button class="save-btn" id="saveGeneral">Save General Settings</button>
+      </div>
+    </div>
+
+    <!-- Category Overrides Tab -->
+    <div class="tab-content" id="overrides-tab">
+      <div class="section">
+        <h2>Category Overrides</h2>
+        <p class="description">When you correct a category from the Gmail overlay (Fix button), it's saved here. These overrides take precedence over automatic classification.</p>
+        <div class="overrides-list" id="overridesList">
+          <!-- Overrides will be populated by JS -->
+        </div>
+        <p class="empty-state" id="overridesEmpty">No category overrides yet. Use the "Fix" button on any email in Gmail to correct its category.</p>
+        <button type="button" class="save-btn" id="clearOverrides" style="display: none; margin-top: 12px; background: #999">Clear All Overrides</button>
       </div>
     </div>
 
