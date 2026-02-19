@@ -805,7 +805,7 @@ class EmailClassifier {
     if (actionKeywords.some(kw => text.includes(kw))) {
       return 1;
     }
-    return text.includes('?') ? 1 : 0;
+    return 0;
   }
 
   getDeadlineProximityScore(text) {
@@ -838,9 +838,16 @@ class EmailClassifier {
       'invoice', 'payment', 'billing', 'contract', 'production',
       'downtime', 'error', 'failure'
     ];
+    const lowConsequenceKeywords = [
+      'receipt', 'order confirmed', 'thank you for your purchase',
+      'subscription confirmed', 'your order', 'order receipt'
+    ];
 
     if (highSeverityKeywords.some(kw => text.includes(kw))) {
       return 3;
+    }
+    if (lowConsequenceKeywords.some(kw => text.includes(kw))) {
+      return 0;
     }
     if (category === 'finance' || category === 'work-current' || category === 'school') {
       return 2;

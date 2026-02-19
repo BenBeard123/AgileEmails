@@ -376,6 +376,10 @@ async function processEmail(email, settings) {
       importantInfo,
       processedAt: Date.now()
     };
+    const serializableEmailData = {
+      ...emailData
+    };
+    delete serializableEmailData.element;
     
     emailCache.set(email.id, emailData);
     
@@ -384,7 +388,7 @@ async function processEmail(email, settings) {
       await new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({
           action: 'saveEmailData',
-          emailData: emailData
+          emailData: serializableEmailData
         }, (response) => {
           if (chrome.runtime.lastError) {
             reject(chrome.runtime.lastError);
@@ -673,18 +677,66 @@ function applyVisualIndicators(emails, settings) {
   }
 }
 
+function parseGmailDate(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const s = dateStr.trim();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // "10:30 AM" / "3:45 PM" → today at that time
+  const timeMatch = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (timeMatch) {
+    let h = parseInt(timeMatch[1], 10);
+    const m = parseInt(timeMatch[2], 10);
+    if (timeMatch[3].toUpperCase() === 'PM' && h < 12) h += 12;
+    if (timeMatch[3].toUpperCase() === 'AM' && h === 12) h = 0;
+    const d = new Date(today);
+    d.setHours(h, m, 0, 0);
+    return d.getTime();
+  }
+
+  // "Yesterday" → yesterday
+  if (/^yesterday$/i.test(s)) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 1);
+    return d.getTime();
+  }
+
+  // "Nov 20" / "Dec 1" → this year (or previous year if in future)
+  const shortMatch = s.match(/^([A-Za-z]+)\s+(\d{1,2})$/);
+  if (shortMatch) {
+    let d = new Date(`${shortMatch[1]} ${shortMatch[2]}, ${now.getFullYear()}`);
+    if (!isNaN(d.getTime()) && d > now) {
+      d = new Date(`${shortMatch[1]} ${shortMatch[2]}, ${now.getFullYear() - 1}`);
+    }
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  // "Dec 1, 2024" or similar
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed.getTime();
+}
+
 function reorderEmailsByPriority(emailElements) {
   try {
     // Don't reorder if there are too few emails (not worth it)
     if (emailElements.length < 3) return;
     
-    // Sort by priority (descending), then by date
+    // Sort by priority (desc) → parsed date (desc, newer first) → unread (true before false) → processedAt (desc)
     emailElements.sort((a, b) => {
-      // Higher priority first
       if (b.data.priority !== a.data.priority) {
         return b.data.priority - a.data.priority;
       }
-      // Then by processed date (newer first)
+      const aTs = parseGmailDate(a.data.date) ?? (a.data.processedAt || 0);
+      const bTs = parseGmailDate(b.data.date) ?? (b.data.processedAt || 0);
+      if (aTs !== bTs) {
+        return bTs - aTs;
+      }
+      const aUnread = a.data.unread ? 1 : 0;
+      const bUnread = b.data.unread ? 1 : 0;
+      if (aUnread !== bUnread) {
+        return bUnread - aUnread;
+      }
       return (b.data.processedAt || 0) - (a.data.processedAt || 0);
     });
     
