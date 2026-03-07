@@ -36,6 +36,7 @@ function setupTabs() {
         loadCategories();
       } else if (targetTab === 'priority') {
         loadPriorityTopics();
+        loadPriorityBoostSenders();
       } else if (targetTab === 'dnd') {
         loadDNDRules();
       } else if (targetTab === 'auto-delete') {
@@ -83,6 +84,10 @@ function setupEventListeners() {
     if (savePriorityTopicsBtn) {
       savePriorityTopicsBtn.addEventListener('click', savePriorityTopics);
     }
+    const addPriorityBoostBtn = document.getElementById('addPriorityBoostSender');
+    if (addPriorityBoostBtn) {
+      addPriorityBoostBtn.addEventListener('click', addPriorityBoostSender);
+    }
     if (addDNDRuleBtn) {
       addDNDRuleBtn.addEventListener('click', addDNDRule);
     }
@@ -112,6 +117,7 @@ function loadSettings() {
   updatePricingUI();
   loadCategories();
   loadPriorityTopics();
+  loadPriorityBoostSenders();
   loadDNDRules();
   loadAutoDeleteSettings();
   loadGeneralSettings();
@@ -183,6 +189,54 @@ function savePriorityTopics() {
   });
   chrome.storage.local.set({ priorityTopics: topics }, () => {
     alert('Priority topics saved!');
+  });
+}
+
+function loadPriorityBoostSenders() {
+  chrome.storage.local.get(['priorityBoostSenders'], (data) => {
+    const list = data.priorityBoostSenders || [];
+    const listEl = document.getElementById('priorityBoostList');
+    const emptyEl = document.getElementById('priorityBoostEmpty');
+    if (!listEl || !emptyEl) return;
+    if (list.length === 0) {
+      listEl.innerHTML = '';
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    listEl.innerHTML = list.map((addr, i) => {
+      const safe = escapeHtml(addr);
+      return `<div class="setting-item" style="display: flex; align-items: center; gap: 8px;">
+        <span class="override-id" style="flex: 1;">${safe}</span>
+        <button type="button" class="remove-override" data-boost-index="${i}">Remove</button>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('.remove-override').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const index = parseInt(btn.getAttribute('data-boost-index'), 10);
+        const next = list.filter((_, j) => j !== index);
+        chrome.storage.local.set({ priorityBoostSenders: next }, () => loadPriorityBoostSenders());
+      });
+    });
+  });
+}
+
+function addPriorityBoostSender() {
+  const input = document.getElementById('priorityBoostEmail');
+  const raw = (input && input.value || '').trim();
+  if (!raw) return;
+  const addr = raw.toLowerCase();
+  chrome.storage.local.get(['priorityBoostSenders'], (data) => {
+    const list = data.priorityBoostSenders || [];
+    if (list.includes(addr)) {
+      alert('That address is already in the list.');
+      return;
+    }
+    const next = [...list, addr];
+    chrome.storage.local.set({ priorityBoostSenders: next }, () => {
+      if (input) input.value = '';
+      loadPriorityBoostSenders();
+    });
   });
 }
 

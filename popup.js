@@ -97,27 +97,24 @@ function loadEmailQueue() {
   chrome.storage.local.get(['emailData', 'categories'], (data) => {
     try {
       const filterValue = priorityFilter ? priorityFilter.value : 'all';
+      const minPriority = filterValue === 'all' ? 4 : parseInt(filterValue, 10);
+
       const emails = (data.emailData || []).filter(email => {
-        if (!email.priority) return false;
-        
-        // Exclude "other" category emails and non-human emails from reply queue
+        const p = Number(email.priority);
+        if (Number.isNaN(p) || p < 1) return false;
+
         if (email.category === 'other' || email.isNonHuman) {
           return false;
         }
-        
-        // Filter by priority
-        if (filterValue !== 'all') {
-          return email.priority === parseInt(filterValue);
-        } else {
-          return email.priority >= 4;
-        }
+
+        return p >= minPriority;
       });
 
       // Sort by priority (descending), then by date
       emails.sort((a, b) => {
-        if (b.priority !== a.priority) {
-          return b.priority - a.priority;
-        }
+        const pa = Number(a.priority);
+        const pb = Number(b.priority);
+        if (pb !== pa) return pb - pa;
         return (b.processedAt || 0) - (a.processedAt || 0);
       });
 
@@ -127,24 +124,7 @@ function loadEmailQueue() {
       }
 
       queueList.innerHTML = emails.map(email => createEmailCard(email, data.categories)).join('');
-      
-      // Add click handlers
-      queueList.querySelectorAll('.email-card').forEach(card => {
-        card.addEventListener('click', () => {
-          chrome.tabs.query({ url: 'https://mail.google.com/*' }, (tabs) => {
-            if (tabs[0]) {
-              chrome.tabs.sendMessage(tabs[0].id, {
-                action: 'highlightEmail',
-                emailId: card.dataset.emailId
-              }, (response) => {
-                if (chrome.runtime.lastError) {
-                  console.debug('AgileEmails: Could not highlight email', chrome.runtime.lastError);
-                }
-              });
-            }
-          });
-        });
-      });
+      attachEmailCardClicks(queueList);
     } catch (error) {
       console.error('AgileEmails: Error loading email queue', error);
       queueList.innerHTML = '<div class="empty-state">Error loading emails</div>';
@@ -191,6 +171,7 @@ function loadMissedEmails() {
       }
 
       missedList.innerHTML = emails.map(email => createEmailCard(email, data.categories)).join('');
+      attachEmailCardClicks(missedList);
     } catch (error) {
       console.error('AgileEmails: Error loading missed emails', error);
       missedList.innerHTML = '<div class="empty-state">Error loading emails</div>';
@@ -237,6 +218,7 @@ function loadTodayEmails() {
       }
 
       todayList.innerHTML = emails.map(email => createEmailCard(email, data.categories)).join('');
+      attachEmailCardClicks(todayList);
     } catch (error) {
       console.error('AgileEmails: Error loading today\'s emails', error);
       todayList.innerHTML = '<div class="empty-state">Error loading emails</div>';
@@ -272,6 +254,7 @@ function loadNonImportantEmails() {
       }
 
       nonImportantList.innerHTML = emails.map(email => createEmailCard(email, data.categories)).join('');
+      attachEmailCardClicks(nonImportantList);
     } catch (error) {
       console.error('AgileEmails: Error loading non-important emails', error);
       nonImportantList.innerHTML = '<div class="empty-state">Error loading emails</div>';
@@ -324,6 +307,25 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function attachEmailCardClicks(container) {
+  if (!container) return;
+  container.querySelectorAll('.email-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const emailId = card.dataset.emailId;
+      chrome.tabs.query({ url: 'https://mail.google.com/*' }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.update(tabs[0].id, { active: true });
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'highlightEmail', emailId: emailId }, () => {});
+        } else {
+          chrome.tabs.create({ url: 'https://mail.google.com/', active: true }, (tab) => {
+            setTimeout(() => chrome.tabs.sendMessage(tab.id, { action: 'highlightEmail', emailId: emailId }, () => {}), 3000);
+          });
+        }
+      });
+    });
+  });
 }
 
 

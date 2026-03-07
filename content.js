@@ -14,6 +14,7 @@ let processingTimeout = null;
 let isProcessing = false;
 let lastProcessTime = 0;
 const MIN_PROCESS_INTERVAL = 3000; // Don't process more than once every 3 seconds
+const MAX_PROCESSED_EMAIL_IDS = 800; // Cap memory
 let isReapplyingOverlays = false; // Prevent recursive calls to reapplyOverlays
 
 // Initialize classifier
@@ -38,13 +39,23 @@ function init() {
     return;
   }
   
-  // Wait for Gmail to load
+  // Wait for Gmail to load, then run with retries if inbox is empty
+  function runWhenReady(attempt) {
+    const maxAttempts = 8;
+    const delay = attempt === 0 ? 1500 : 2000 + attempt * 500;
+    setTimeout(() => {
+      processGmailPage().then(() => {
+        const emails = extractEmails();
+        if (emails.length === 0 && attempt < maxAttempts - 1) {
+          runWhenReady(attempt + 1);
+        }
+      });
+    }, delay);
+  }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(processGmailPage, 2000);
-    });
+    document.addEventListener('DOMContentLoaded', () => runWhenReady(0));
   } else {
-    setTimeout(processGmailPage, 2000);
+    runWhenReady(0);
   }
 
   // Listen for Gmail navigation with debouncing and throttling
@@ -93,7 +104,7 @@ function init() {
       });
       // Also check if email rows lost their overlays
       if (mutation.type === 'childList' && mutation.target) {
-        const emailRow = mutation.target.closest('tr[role="row"]');
+        const emailRow = mutation.target.closest('tr[role="row"]') || mutation.target.closest('tr');
         if (emailRow && !emailRow.querySelector('.agileemails-overlay')) {
           const emailId = emailRow.getAttribute('data-thread-perm-id') || 
                          emailRow.closest('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id');
@@ -223,10 +234,15 @@ async function processGmailPage() {
   
   try {
     const data = await new Promise((resolve) => {
-      chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier', 'priorityTopics', 'categoryOverrides'], resolve);
+      chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier', 'priorityTopics', 'priorityBoostSenders', 'categoryOverrides'], resolve);
     });
     
     const emails = extractEmails();
+    if (processedEmails.size > MAX_PROCESSED_EMAIL_IDS) {
+      const ids = Array.from(processedEmails);
+      processedEmails.clear();
+      ids.slice(-MAX_PROCESSED_EMAIL_IDS).forEach(id => processedEmails.add(id));
+    }
     const processPromises = emails.map(email => {
       if (!processedEmails.has(email.id)) {
         processedEmails.add(email.id);
@@ -246,98 +262,97 @@ async function processGmailPage() {
 
 function extractEmails() {
   const emails = [];
-  
-  // More robust Gmail thread selectors - try multiple patterns
-  // Only get emails that are currently visible on screen
-  let threadElements = document.querySelectorAll('div[role="main"] tr[role="row"]:not([style*="display: none"])');
-  
-  // Fallback selectors if primary doesn't work
+  const main = document.querySelector('div[role="main"]') || document.body;
+
+  // Multiple row selectors for different Gmail layouts
+  let threadElements = main.querySelectorAll('tr[role="row"]');
   if (threadElements.length === 0) {
-    threadElements = document.querySelectorAll('table tbody tr[role="row"]:not([style*="display: none"])');
+    threadElements = document.querySelectorAll('table tbody tr[role="row"]');
   }
   if (threadElements.length === 0) {
-    threadElements = document.querySelectorAll('div[data-thread-perm-id]:not([style*="display: none"])');
+    threadElements = document.querySelectorAll('div[role="main"] table tr');
   }
-  
-  // Filter to only visible elements (check if element is in viewport or parent is visible)
-  const visibleElements = Array.from(threadElements).filter(element => {
-    // Check if element or its parent is hidden
-    if (element.offsetParent === null && getComputedStyle(element).display === 'none') {
-      return false;
-    }
-    // Check if element is within viewport (rough check)
-    const rect = element.getBoundingClientRect();
+  if (threadElements.length === 0) {
+    const rows = main.querySelectorAll('[data-thread-perm-id]');
+    threadElements = Array.from(rows).filter(el => el.closest('table') || el.tagName === 'TR');
+  }
+
+  const visibleElements = Array.from(threadElements).filter(el => {
+    if (el.getAttribute('style')?.includes('display: none')) return false;
+    if (el.offsetParent === null && getComputedStyle(el).display === 'none') return false;
+    const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   });
-  
+
   visibleElements.forEach((element, index) => {
     try {
-      // Try multiple selector patterns for subject
-      let subjectEl = element.querySelector('span.bog');
+      const row = element;
+      // Subject: try known Gmail classes then structural fallback
+      let subjectEl = row.querySelector('span.bog') || row.querySelector('.bog');
       if (!subjectEl) {
-        subjectEl = element.querySelector('[data-thread-perm-id] span');
+        const tds = row.querySelectorAll('td');
+        if (tds.length >= 2) {
+          const secondCell = tds[1];
+          subjectEl = secondCell.querySelector('span[data-thread-perm-id] span') ||
+            secondCell.querySelector('span') ||
+            Array.from(secondCell.querySelectorAll('span')).find(s => (s.textContent || '').trim().length > 1);
+        }
       }
       if (!subjectEl) {
-        subjectEl = element.querySelector('.bog');
+        subjectEl = row.querySelector('[data-thread-perm-id] span');
       }
-      
-      // Try multiple selector patterns for sender
-      let senderEl = element.querySelector('span.yW span[email]');
+      if (!subjectEl) {
+        const anySpan = row.querySelector('td:nth-child(2) span, td span');
+        if (anySpan && (anySpan.textContent || '').trim().length > 0) subjectEl = anySpan;
+      }
+
+      // Sender: try [email] attribute then first cell text
+      let senderEl = row.querySelector('span[email]') || row.querySelector('[email]');
       if (!senderEl) {
-        senderEl = element.querySelector('span[email]');
+        senderEl = row.querySelector('span.yW span') || row.querySelector('.yW span');
       }
       if (!senderEl) {
-        senderEl = element.querySelector('.yW span');
+        const firstTd = row.querySelector('td');
+        if (firstTd) senderEl = firstTd.querySelector('span') || firstTd;
       }
-      if (!senderEl) {
-        senderEl = element.querySelector('[email]');
+
+      let senderEmail = '';
+      if (senderEl) {
+        senderEmail = senderEl.getAttribute('email') || senderEl.getAttribute('title') || (senderEl.textContent || '').trim();
       }
-      
-      // Try multiple selector patterns for date
-      let dateEl = element.querySelector('span[title]');
-      if (!dateEl) {
-        dateEl = element.querySelector('.bqe');
-      }
-      
-      // Try to get preview/snippet text as body
+      const subject = subjectEl ? (subjectEl.textContent || '').trim() : '';
+
+      // Need at least subject or sender to treat as valid row
+      if (!subject && !senderEmail) return;
+
+      const threadId = row.getAttribute('data-thread-perm-id') ||
+        row.querySelector('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id') ||
+        `${(senderEmail || 'unknown').slice(0, 30)}-${subject.slice(0, 40)}-${index}`.replace(/\s+/g, ' ');
+
+      let dateEl = row.querySelector('span[title]') || row.querySelector('.bqe');
+      const date = dateEl ? (dateEl.getAttribute('title') || dateEl.textContent || '').trim() : null;
+
       let bodyText = '';
-      const snippetEl = element.querySelector('.bog + span, .y2, .yP');
-      if (snippetEl) {
-        bodyText = snippetEl.textContent || '';
-      }
-      
-      // Check for unread
-      const unread = element.classList.contains('zE') || 
-                     element.querySelector('.zE') !== null ||
-                     element.getAttribute('aria-label')?.includes('Unread') ||
-                     false;
-      
-      if (subjectEl && senderEl) {
-        const senderEmail = senderEl.getAttribute('email') || senderEl.textContent || '';
-        const subject = subjectEl.textContent || '';
-        const date = dateEl ? (dateEl.getAttribute('title') || dateEl.textContent) : null;
-        
-        // Generate more reliable ID using thread ID if available
-        const threadId = element.getAttribute('data-thread-perm-id') || 
-                        element.closest('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id') ||
-                        `${senderEmail}-${subject}-${index}`;
-        
-        const email = {
-          id: threadId,
-          subject: subject.trim(),
-          from: senderEmail.trim(),
-          date: date,
-          unread: unread,
-          element: element,
-          body: bodyText.trim() // Use preview text as body
-        };
-        emails.push(email);
-      }
+      const snippetEl = row.querySelector('.bog + span, .y2, .yP, td span.y2');
+      if (snippetEl) bodyText = snippetEl.textContent || '';
+
+      const unread = row.classList.contains('zE') || row.querySelector('.zE') !== null ||
+        (row.getAttribute('aria-label') || '').toLowerCase().includes('unread');
+
+      emails.push({
+        id: String(threadId),
+        subject: subject || '(No subject)',
+        from: senderEmail || '',
+        date: date,
+        unread: !!unread,
+        element: row,
+        body: bodyText.trim()
+      });
     } catch (e) {
-      console.error('AgileEmails: Error extracting email:', e);
+      console.warn('AgileEmails: Error extracting email row', e);
     }
   });
-  
+
   return emails;
 }
 
@@ -374,7 +389,15 @@ async function processEmail(email, settings) {
     if (priorityTopics.includes(classification.category) && finalPriority < 5) {
       finalPriority = Math.min(5, finalPriority + 1);
     }
-    
+    // Apply sender boost: emails from listed addresses get +1
+    const boostSenders = (settings.priorityBoostSenders || []).map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    const fromLower = (email.from || '').trim().toLowerCase();
+    if (boostSenders.length && fromLower && finalPriority < 5) {
+      if (boostSenders.some(addr => fromLower.includes(addr))) {
+        finalPriority = Math.min(5, finalPriority + 1);
+      }
+    }
+
     const emailData = {
       ...email,
       ...classification,

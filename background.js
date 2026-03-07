@@ -57,6 +57,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
             }
           },
           priorityTopics: [],
+          priorityBoostSenders: [],
           categoryOverrides: {}
         });
         console.log('AgileEmails: Storage initialized successfully');
@@ -64,11 +65,11 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         console.error('AgileEmails: Error initializing storage', storageError);
       }
     } else if (details.reason === 'update') {
-      // On update: ensure categoryOverrides exists without overwriting
-      const existing = await chrome.storage.local.get(['categoryOverrides']);
-      if (existing.categoryOverrides === undefined) {
-        await chrome.storage.local.set({ categoryOverrides: {} });
-      }
+      const existing = await chrome.storage.local.get(['categoryOverrides', 'priorityBoostSenders']);
+      const updates = {};
+      if (existing.categoryOverrides === undefined) updates.categoryOverrides = {};
+      if (existing.priorityBoostSenders === undefined) updates.priorityBoostSenders = [];
+      if (Object.keys(updates).length) await chrome.storage.local.set(updates);
     }
 
     // Schedule alarm safely

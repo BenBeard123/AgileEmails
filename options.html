@@ -127,6 +127,18 @@
           </div>
         </div>
         <button class="save-btn" id="savePriorityTopics">Save Priority Topics</button>
+
+        <h2 style="margin-top: 24px;">Boost priority by sender</h2>
+        <p class="description">Emails from these addresses get a +1 priority bump (capped at 5). Add one address per line or use the field below.</p>
+        <div class="setting-item">
+          <label for="priorityBoostEmail">Email or partial address:</label>
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <input type="text" id="priorityBoostEmail" placeholder="boss@company.com" style="flex: 1; max-width: 320px;">
+            <button type="button" class="add-btn" id="addPriorityBoostSender">Add</button>
+          </div>
+        </div>
+        <div class="priority-boost-list" id="priorityBoostList" style="margin-top: 12px;"></div>
+        <p class="empty-state" id="priorityBoostEmpty" style="margin-top: 8px;">No boost senders. Add an email above.</p>
       </div>
     </div>
 
