@@ -75,6 +75,16 @@ AgileEmails is an intelligent Chrome extension designed to help you manage your 
 5. Click "Load unpacked" and select the extracted folder
 6. The extension will be installed and ready to use
 
+### Optional: AI classification (experimental)
+
+To enable local AI-based categorization (no data sent to external servers):
+
+1. From the extension folder run: `npm install` then `npm run build`
+2. Reload the extension in `chrome://extensions/`
+3. In Settings → General, turn on "Use AI classification (experimental)"
+
+The first time you enable it, a small ML model (~60 MB) is downloaded and cached locally. If you skip the build step, the extension still works using rule-based classification only.
+
 ## Usage
 
 1. **Access the Extension**: Click the AgileEmails icon in your Chrome toolbar

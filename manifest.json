@@ -13,7 +13,9 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://*.google.com/*"
+    "https://*.google.com/*",
+    "https://huggingface.co/*",
+    "https://cdn.huggingface.co/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -36,7 +38,7 @@
   "content_scripts": [
     {
       "matches": ["https://mail.google.com/*"],
-      "js": ["emailClassifier.js", "content.js"],
+      "js": ["emailClassifier.js", "dist/aiClassifier.bundle.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }
@@ -44,7 +46,7 @@
   "options_page": "options.html",
   "web_accessible_resources": [
     {
-      "resources": ["*.png", "*.svg"],
+      "resources": ["*.png", "*.svg", "dist/aiClassifier.bundle.js", "lib/*.wasm", "lib/*.mjs"],
       "matches": ["https://mail.google.com/*"]
     }
   ]

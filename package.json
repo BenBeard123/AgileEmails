@@ -3,7 +3,14 @@
   "version": "1.0.0",
   "description": "AgileEmails - Smart Email Management Chrome Extension",
   "scripts": {
-    "build": "echo 'No build step required'"
+    "build": "node build-ai.mjs",
+    "build:ai": "node build-ai.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
   },
   "repository": {
     "type": "git",

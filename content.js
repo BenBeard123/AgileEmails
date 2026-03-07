@@ -366,12 +366,42 @@ async function processEmail(email, settings) {
     // Check if email is non-human FIRST (before classification)
     const isNonHuman = classifier.isNonHumanEmail(email);
     email.isNonHuman = isNonHuman; // Add to email object for classifier
-    
-    // Classify email (check user overrides first)
-    const classification = classifier.classifyEmail(email, {
-      categoryOverrides: settings.categoryOverrides || {}
-    });
-    
+
+    // When AI is enabled: try AI first; use rule-based only when AI fails or is low confidence
+    const useAI = settings.settings?.useAIClassification === true;
+    const aiClassifier = typeof window !== 'undefined' && window.agileEmailsAIClassifier;
+    const AI_CONFIDENCE_THRESHOLD = 0.35; // below this, fall back to rules
+
+    let classification;
+
+    if (useAI && aiClassifier && typeof aiClassifier.classify === 'function') {
+      const combinedText = [email.from, email.subject, email.body].filter(Boolean).join(' ');
+      let aiResult = null;
+      try {
+        aiResult = await aiClassifier.classify(combinedText);
+      } catch (e) {
+        console.warn('AgileEmails: AI classify error', e);
+      }
+      const aiConfident = aiResult && aiResult.category && (aiResult.score == null || aiResult.score >= AI_CONFIDENCE_THRESHOLD);
+      if (aiConfident) {
+        classification = {
+          category: aiResult.category,
+          priority: aiResult.priority ?? 3,
+          isNewsletter: aiResult.category === 'promo',
+          confidence: aiResult.score != null ? aiResult.score * 25 : 10,
+          isNonHuman: false
+        };
+      } else {
+        classification = classifier.classifyEmail(email, {
+          categoryOverrides: settings.categoryOverrides || {}
+        });
+      }
+    } else {
+      classification = classifier.classifyEmail(email, {
+        categoryOverrides: settings.categoryOverrides || {}
+      });
+    }
+
     // Check DND rules
     const isDND = classifier.checkDNDRules(email, settings.dndRules || []);
     

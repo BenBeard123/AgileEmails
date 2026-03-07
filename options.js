@@ -473,7 +473,8 @@ function loadGeneralSettings() {
     document.getElementById('showPriorityColors').checked = settings.showPriorityColors !== false;
     document.getElementById('showCategoryBadges').checked = settings.showCategoryBadges !== false;
     document.getElementById('enableThreadSummary').checked = settings.enableThreadSummary !== false;
-    document.getElementById('reorderByPriority').checked = settings.reorderByPriority === true; // Default to false
+    document.getElementById('reorderByPriority').checked = settings.reorderByPriority === true;
+    document.getElementById('useAIClassification').checked = settings.useAIClassification === true;
   });
 }
 
@@ -491,7 +492,8 @@ function saveGeneral() {
       showPriorityColors: document.getElementById('showPriorityColors').checked,
       showCategoryBadges: document.getElementById('showCategoryBadges').checked,
       enableThreadSummary: document.getElementById('enableThreadSummary').checked,
-      reorderByPriority: document.getElementById('reorderByPriority').checked
+      reorderByPriority: document.getElementById('reorderByPriority').checked,
+      useAIClassification: document.getElementById('useAIClassification').checked
     };
     
     chrome.storage.local.set({ settings }, () => {

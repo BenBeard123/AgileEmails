@@ -1,0 +1,2 @@
+# WASM files are copied here by: npm run build
+# (from node_modules/onnxruntime-web/dist/)
