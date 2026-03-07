@@ -14,11 +14,13 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSettings();
     setupTabs();
     loadEmailQueue();
+    loadBoostSenders();
     
     const refreshBtn = document.getElementById('refreshQueue');
     const settingsBtn = document.getElementById('settingsBtn');
     const upgradeBtn = document.getElementById('upgradeBtn');
     const priorityFilter = document.getElementById('priorityFilter');
+    const boostAddBtn = document.getElementById('boostAddBtn');
     
     if (refreshBtn) {
       refreshBtn.addEventListener('click', loadEmailQueue);
@@ -35,6 +37,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (priorityFilter) {
       priorityFilter.addEventListener('change', loadEmailQueue);
+    }
+    if (boostAddBtn) {
+      boostAddBtn.addEventListener('click', addBoostSenders);
     }
   } catch (error) {
     console.error('AgileEmails: Error initializing popup', error);
@@ -83,6 +88,53 @@ function loadSettings() {
     } catch (error) {
       console.error('AgileEmails: Error loading settings', error);
     }
+  });
+}
+
+function loadBoostSenders() {
+  const listEl = document.getElementById('boostList');
+  if (!listEl) return;
+  chrome.storage.local.get(['priorityBoostSenders'], (data) => {
+    const list = data.priorityBoostSenders || [];
+    if (list.length === 0) {
+      listEl.innerHTML = '<span class="boost-empty">None yet. Paste addresses above and click Add.</span>';
+      return;
+    }
+    listEl.innerHTML = list.map((addr, i) => {
+      const safe = escapeHtml(addr);
+      return `<span class="boost-chip" data-index="${i}">${safe}<button type="button" class="boost-chip-remove" data-index="${i}" aria-label="Remove">×</button></span>`;
+    }).join('');
+    listEl.querySelectorAll('.boost-chip-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const index = parseInt(btn.getAttribute('data-index'), 10);
+        const next = list.filter((_, j) => j !== index);
+        chrome.storage.local.set({ priorityBoostSenders: next }, () => loadBoostSenders());
+      });
+    });
+  });
+}
+
+function addBoostSenders() {
+  const input = document.getElementById('boostEmailsInput');
+  if (!input) return;
+  const raw = (input.value || '').trim();
+  if (!raw) return;
+  const newAddrs = raw.split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(s => s && s.includes('@'));
+  if (newAddrs.length === 0) {
+    input.value = '';
+    return;
+  }
+  chrome.storage.local.get(['priorityBoostSenders'], (data) => {
+    const list = data.priorityBoostSenders || [];
+    const combined = [...list];
+    newAddrs.forEach(addr => {
+      if (!combined.includes(addr)) combined.push(addr);
+    });
+    chrome.storage.local.set({ priorityBoostSenders: combined }, () => {
+      input.value = '';
+      loadBoostSenders();
+    });
   });
 }
 
