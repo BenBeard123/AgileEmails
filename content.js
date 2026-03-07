@@ -419,12 +419,12 @@ async function processEmail(email, settings) {
     if (priorityTopics.includes(classification.category) && finalPriority < 5) {
       finalPriority = Math.min(5, finalPriority + 1);
     }
-    // Apply sender boost: emails from listed addresses get +1
+    // Apply sender boost: emails from listed addresses get +1 and minimum priority 3
     const boostSenders = (settings.priorityBoostSenders || []).map(s => String(s).trim().toLowerCase()).filter(Boolean);
     const fromLower = (email.from || '').trim().toLowerCase();
-    if (boostSenders.length && fromLower && finalPriority < 5) {
+    if (boostSenders.length && fromLower) {
       if (boostSenders.some(addr => fromLower.includes(addr))) {
-        finalPriority = Math.min(5, finalPriority + 1);
+        finalPriority = Math.max(3, Math.min(5, finalPriority + 1));
       }
     }
 
