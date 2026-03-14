@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "AgileEmails - Smart Email Management",
+  "version": "2.0.0",
+  "description": "Award-winning email intelligence: NLP-powered categorization, 5-star priority ratings, genre detection, entity extraction, and smart summarization",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://*.google.com/*",
+    "https://huggingface.co/*",
+    "https://cdn.huggingface.co/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["emailClassifier.js", "dist/aiClassifier.bundle.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["*.png", "*.svg", "dist/aiClassifier.bundle.js", "lib/*.wasm", "lib/*.mjs"],
+      "matches": ["https://mail.google.com/*"]
+    }
+  ]
+}
+

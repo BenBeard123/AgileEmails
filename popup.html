@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgileEmails</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="header-top">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+            <polyline points="22,6 12,13 2,6"/>
+          </svg>
+        </div>
+        <span class="brand-name">AgileEmails</span>
+      </div>
+      <div class="header-actions">
+        <div class="pricing-badge" id="pricingBadge">FREE</div>
+        <button class="refresh-btn-header" id="refreshAll" title="Refresh">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <!-- Stats bar -->
+    <div class="stats-bar" id="statsBar">
+      <div class="stat">
+        <span class="stat-value" id="statUrgent">0</span>
+        <span class="stat-label">urgent</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat">
+        <span class="stat-value" id="statToday">0</span>
+        <span class="stat-label">today</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat">
+        <span class="stat-value" id="statAction">0</span>
+        <span class="stat-label">need action</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat">
+        <span class="stat-value" id="statTotal">0</span>
+        <span class="stat-label">total</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="focus">
+      <span class="tab-icon">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+      </span>
+      Focus
+    </button>
+    <button class="tab-btn" data-tab="today">
+      <span class="tab-icon">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </span>
+      Today
+    </button>
+    <button class="tab-btn" data-tab="digest">
+      <span class="tab-icon">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </span>
+      Digest
+    </button>
+    <button class="tab-btn" data-tab="muted">
+      <span class="tab-icon">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+      </span>
+      Muted
+    </button>
+  </div>
+
+  <!-- Tab Contents -->
+  <div class="tab-content active" id="focus-tab">
+    <div class="email-list" id="focusList">
+      <div class="loading">
+        <div class="loading-spinner"></div>
+        <span>Loading focus emails...</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="today-tab">
+    <div class="email-list" id="todayList">
+      <div class="loading">
+        <div class="loading-spinner"></div>
+        <span>Loading today's emails...</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="digest-tab">
+    <div class="digest-view" id="digestView">
+      <div class="loading">
+        <div class="loading-spinner"></div>
+        <span>Loading digest...</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="muted-tab">
+    <div class="email-list" id="mutedList">
+      <div class="loading">
+        <div class="loading-spinner"></div>
+        <span>Loading muted emails...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Priority Boost Section -->
+  <div class="boost-section" id="boostSection">
+    <button class="boost-toggle" id="boostToggle">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Priority Boost Senders
+      <svg class="boost-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="boost-content" id="boostContent" style="display: none;">
+      <p class="boost-hint">Paste email addresses to always boost their priority.</p>
+      <div class="boost-input-row">
+        <textarea id="boostEmailsInput" class="boost-input" rows="2" placeholder="one@example.com, two@example.com"></textarea>
+        <button type="button" class="boost-add-btn" id="boostAddBtn">Add</button>
+      </div>
+      <div class="boost-list" id="boostList"></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <button class="footer-btn" id="settingsBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+    <button class="footer-btn footer-btn-primary" id="upgradeBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      Upgrade
+    </button>
+  </div>
+
+  <script src="emailClassifier.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

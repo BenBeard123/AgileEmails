@@ -1,0 +1,1598 @@
+// Content script for Gmail integration
+// Prevent multiple initializations
+if (window.agileEmailsInitialized) {
+  console.warn('AgileEmails: Script already initialized, skipping duplicate load');
+  // Stop execution if already initialized
+  throw new Error('AgileEmails already initialized');
+}
+window.agileEmailsInitialized = true;
+
+let classifier;
+let emailCache = new Map();
+let processedEmails = new Set();
+let processingTimeout = null;
+let isProcessing = false;
+let lastProcessTime = 0;
+const MIN_PROCESS_INTERVAL = 3000; // Don't process more than once every 3 seconds
+const MAX_PROCESSED_EMAIL_IDS = 800; // Cap memory
+let isReapplyingOverlays = false; // Prevent recursive calls to reapplyOverlays
+let senderReputationCache = {}; // { email: { count, totalPriority, avgPriority, categories: {} } }
+let senderRepDirty = false;
+
+// Initialize classifier
+try {
+  classifier = new EmailClassifier();
+} catch (e) {
+  console.error('AgileEmails: Failed to initialize classifier', e);
+}
+
+let initCalled = false;
+
+function init() {
+  // Prevent multiple initializations
+  if (initCalled) {
+    console.warn('AgileEmails: init() already called, skipping');
+    return;
+  }
+  initCalled = true;
+  
+  if (!classifier) {
+    console.error('AgileEmails: Classifier not available');
+    return;
+  }
+  
+  // Wait for Gmail to load, then run with retries if inbox is empty
+  function runWhenReady(attempt) {
+    const maxAttempts = 8;
+    const delay = attempt === 0 ? 1500 : 2000 + attempt * 500;
+    setTimeout(() => {
+      processGmailPage().then(() => {
+        const emails = extractEmails();
+        if (emails.length === 0 && attempt < maxAttempts - 1) {
+          runWhenReady(attempt + 1);
+        }
+      });
+    }, delay);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => runWhenReady(0));
+  } else {
+    runWhenReady(0);
+  }
+
+  // Listen for Gmail navigation with debouncing and throttling
+  const observer = new MutationObserver((mutations) => {
+    // Only process if significant changes (new emails added, not just attribute changes)
+    const hasSignificantChanges = mutations.some(mutation => 
+      mutation.type === 'childList' && mutation.addedNodes.length > 0
+    );
+    
+    if (!hasSignificantChanges) return;
+    
+    if (processingTimeout) {
+      clearTimeout(processingTimeout);
+    }
+    
+    // Throttle processing
+    const now = Date.now();
+    const timeSinceLastProcess = now - lastProcessTime;
+    const delay = timeSinceLastProcess < MIN_PROCESS_INTERVAL 
+      ? MIN_PROCESS_INTERVAL - timeSinceLastProcess 
+      : 1000;
+    
+    processingTimeout = setTimeout(() => {
+      if (!isProcessing) {
+        processGmailPage();
+      }
+    }, delay);
+  });
+
+  // Only observe childList changes in the main email list area, not all mutations
+  const mainArea = document.querySelector('div[role="main"]') || document.body;
+  observer.observe(mainArea, {
+    childList: true,
+    subtree: false // Don't observe deep subtree changes
+  });
+  
+  // Watch for overlay removal and re-apply them
+  const overlayObserver = new MutationObserver((mutations) => {
+    // Check if any of our overlays were removed
+    let shouldReapply = false;
+    mutations.forEach(mutation => {
+      mutation.removedNodes.forEach(node => {
+        if (node.nodeType === 1 && (node.classList?.contains('agileemails-overlay') || node.querySelector?.('.agileemails-overlay'))) {
+          shouldReapply = true;
+        }
+      });
+      // Also check if email rows lost their overlays
+      if (mutation.type === 'childList' && mutation.target) {
+        const emailRow = mutation.target.closest('tr[role="row"]') || mutation.target.closest('tr');
+        if (emailRow && !emailRow.querySelector('.agileemails-overlay')) {
+          const emailId = emailRow.getAttribute('data-thread-perm-id') || 
+                         emailRow.closest('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id');
+          if (emailId && emailCache.has(emailId)) {
+            shouldReapply = true;
+          }
+        }
+      }
+    });
+    
+    if (shouldReapply && !isProcessing) {
+      // Re-apply overlays that were removed
+      setTimeout(() => {
+        reapplyOverlays();
+      }, 100);
+    }
+  });
+  
+  // Observe the email list area for overlay removals
+  overlayObserver.observe(mainArea, {
+    childList: true,
+    subtree: true,
+    attributes: false
+  });
+  
+  // Aggressive overlay persistence using requestAnimationFrame
+  let lastOverlayCheck = 0;
+  const OVERLAY_CHECK_INTERVAL = 200; // Check every 200ms
+  
+  function persistentOverlayCheck() {
+    const now = Date.now();
+    if (now - lastOverlayCheck >= OVERLAY_CHECK_INTERVAL && !isProcessing) {
+      lastOverlayCheck = now;
+      reapplyOverlays();
+    }
+    requestAnimationFrame(persistentOverlayCheck);
+  }
+  
+  // Start persistent checking
+  requestAnimationFrame(persistentOverlayCheck);
+  
+  // Also check on scroll (immediate)
+  let scrollTimeout;
+  window.addEventListener('scroll', () => {
+    if (!isProcessing) {
+      reapplyOverlays();
+    }
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+      if (!isProcessing) {
+        reapplyOverlays();
+      }
+    }, 100);
+  }, { passive: true });
+  
+  // Check on mouseover (immediate)
+  // Reuse mainArea declared earlier (line 77)
+  mainArea.addEventListener('mouseover', (e) => {
+    try {
+      if (!(e.target instanceof Element)) {
+        return;
+      }
+      const emailRow = e.target.closest('tr[role="row"]');
+      if (!emailRow || !document.body.contains(emailRow) || typeof emailRow.querySelector !== 'function') {
+        return;
+      }
+      if (!emailRow.querySelector('.agileemails-overlay')) {
+        const emailId = emailRow.getAttribute('data-agileemails-id') ||
+                       emailRow.getAttribute('data-thread-perm-id');
+        if (emailId && emailCache && typeof emailCache.has === 'function' && emailCache.has(emailId)) {
+          if (!isProcessing) {
+            chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
+              if (emailCache && typeof emailCache.get === 'function') {
+                const emailData = emailCache.get(emailId);
+                if (emailData) {
+                  applyOverlayToElement(emailRow, emailData, data);
+                }
+              }
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('AgileEmails: Error in mouseover handler', error);
+    }
+  }, { passive: true });
+  
+  // Check on any DOM mutation in email area
+  const emailAreaObserver = new MutationObserver((mutations) => {
+    try {
+      // Ignore mutations caused by our own overlay additions to prevent infinite loop
+      const isOurMutation = mutations.some(mutation => {
+        try {
+          return Array.from(mutation.addedNodes).some(node => {
+            if (node && node.nodeType === 1) {
+              return node.classList?.contains('agileemails-overlay') || 
+                     node.querySelector?.('.agileemails-overlay') !== null;
+            }
+            return false;
+          });
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      if (!isProcessing && !isReapplyingOverlays && !isOurMutation) {
+        reapplyOverlays();
+      }
+    } catch (error) {
+      console.error('AgileEmails: Error in MutationObserver', error);
+    }
+  });
+  
+  if (mainArea) {
+    emailAreaObserver.observe(mainArea, {
+      childList: true,
+      subtree: true
+    });
+  }
+}
+
+async function processGmailPage() {
+  if (isProcessing) return; // Prevent concurrent processing
+  
+  isProcessing = true;
+  lastProcessTime = Date.now();
+  
+  try {
+    const data = await new Promise((resolve) => {
+      chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier', 'priorityTopics', 'priorityBoostSenders', 'categoryOverrides'], resolve);
+    });
+    
+    const emails = extractEmails();
+    if (processedEmails.size > MAX_PROCESSED_EMAIL_IDS) {
+      const ids = Array.from(processedEmails);
+      processedEmails.clear();
+      ids.slice(-MAX_PROCESSED_EMAIL_IDS).forEach(id => processedEmails.add(id));
+    }
+    const processPromises = emails.map(email => {
+      if (!processedEmails.has(email.id)) {
+        processedEmails.add(email.id);
+        return processEmail(email, data);
+      }
+      return Promise.resolve();
+    });
+    
+    await Promise.all(processPromises);
+    applyVisualIndicators(emails, data);
+  } catch (error) {
+    console.error('AgileEmails: Error processing Gmail page', error);
+  } finally {
+    isProcessing = false;
+  }
+}
+
+function extractEmails() {
+  const emails = [];
+  const main = document.querySelector('div[role="main"]') || document.body;
+
+  // Multiple row selectors for different Gmail layouts
+  let threadElements = main.querySelectorAll('tr[role="row"]');
+  if (threadElements.length === 0) {
+    threadElements = document.querySelectorAll('table tbody tr[role="row"]');
+  }
+  if (threadElements.length === 0) {
+    threadElements = document.querySelectorAll('div[role="main"] table tr');
+  }
+  if (threadElements.length === 0) {
+    const rows = main.querySelectorAll('[data-thread-perm-id]');
+    threadElements = Array.from(rows).filter(el => el.closest('table') || el.tagName === 'TR');
+  }
+
+  const visibleElements = Array.from(threadElements).filter(el => {
+    if (el.getAttribute('style')?.includes('display: none')) return false;
+    if (el.offsetParent === null && getComputedStyle(el).display === 'none') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+
+  visibleElements.forEach((element, index) => {
+    try {
+      const row = element;
+      // Subject: try known Gmail classes then structural fallback
+      let subjectEl = row.querySelector('span.bog') || row.querySelector('.bog');
+      if (!subjectEl) {
+        const tds = row.querySelectorAll('td');
+        if (tds.length >= 2) {
+          const secondCell = tds[1];
+          subjectEl = secondCell.querySelector('span[data-thread-perm-id] span') ||
+            secondCell.querySelector('span') ||
+            Array.from(secondCell.querySelectorAll('span')).find(s => (s.textContent || '').trim().length > 1);
+        }
+      }
+      if (!subjectEl) {
+        subjectEl = row.querySelector('[data-thread-perm-id] span');
+      }
+      if (!subjectEl) {
+        const anySpan = row.querySelector('td:nth-child(2) span, td span');
+        if (anySpan && (anySpan.textContent || '').trim().length > 0) subjectEl = anySpan;
+      }
+
+      // Sender: try [email] attribute then first cell text
+      let senderEl = row.querySelector('span[email]') || row.querySelector('[email]');
+      if (!senderEl) {
+        senderEl = row.querySelector('span.yW span') || row.querySelector('.yW span');
+      }
+      if (!senderEl) {
+        const firstTd = row.querySelector('td');
+        if (firstTd) senderEl = firstTd.querySelector('span') || firstTd;
+      }
+
+      let senderEmail = '';
+      if (senderEl) {
+        senderEmail = senderEl.getAttribute('email') || senderEl.getAttribute('title') || (senderEl.textContent || '').trim();
+      }
+      const subject = subjectEl ? (subjectEl.textContent || '').trim() : '';
+
+      // Need at least subject or sender to treat as valid row
+      if (!subject && !senderEmail) return;
+
+      const threadId = row.getAttribute('data-thread-perm-id') ||
+        row.querySelector('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id') ||
+        `${(senderEmail || 'unknown').slice(0, 30)}-${subject.slice(0, 40)}-${index}`.replace(/\s+/g, ' ');
+
+      let dateEl = row.querySelector('span[title]') || row.querySelector('.bqe');
+      const date = dateEl ? (dateEl.getAttribute('title') || dateEl.textContent || '').trim() : null;
+
+      let bodyText = '';
+      // Try multiple Gmail snippet selectors for different layouts
+      const snippetSelectors = [
+        '.bog + span',      // Standard snippet after subject
+        '.y2',              // Snippet class
+        '.yP',              // Alternate snippet class
+        'td span.y2',       // Snippet in table cell
+        'span.y2',          // Direct snippet span
+        '.Zt',              // Another Gmail snippet class
+        'td:nth-child(2) .y2, td:nth-child(3) .y2', // Snippets in mail cells
+        '[data-snippet]'    // Data-attribute based snippet
+      ];
+      for (const sel of snippetSelectors) {
+        const snippetEl = row.querySelector(sel);
+        if (snippetEl && (snippetEl.textContent || '').trim().length > 3) {
+          bodyText = snippetEl.textContent || '';
+          break;
+        }
+      }
+      // Also try to grab the full snippet from aria-label (often contains subject + snippet)
+      if (!bodyText) {
+        const ariaLabel = row.getAttribute('aria-label') || '';
+        if (ariaLabel.length > 30) {
+          bodyText = ariaLabel;
+        }
+      }
+
+      const unread = row.classList.contains('zE') || row.querySelector('.zE') !== null ||
+        (row.getAttribute('aria-label') || '').toLowerCase().includes('unread');
+
+      emails.push({
+        id: String(threadId),
+        subject: subject || '(No subject)',
+        from: senderEmail || '',
+        date: date,
+        unread: !!unread,
+        element: row,
+        body: bodyText.trim()
+      });
+    } catch (e) {
+      console.warn('AgileEmails: Error extracting email row', e);
+    }
+  });
+
+  return emails;
+}
+
+async function processEmail(email, settings) {
+  try {
+    if (!classifier) {
+      console.error('AgileEmails: Classifier not available');
+      return;
+    }
+
+    // Check for category override first
+    const overrides = settings.categoryOverrides || {};
+    let classification;
+
+    if (overrides[email.id]) {
+      // User-corrected category: classify normally then override category
+      classification = classifier.classify(email);
+      classification.category = overrides[email.id];
+      // Recalculate priority for overridden category
+      const catDef = classifier.categories[classification.category];
+      if (catDef) {
+        classification.priority = Math.max(classification.priority, catDef.priority);
+      }
+    } else {
+      // When AI is enabled: try AI first; use rule-based only when AI fails
+      const useAI = settings.settings?.useAIClassification === true;
+      const aiClassifier = typeof window !== 'undefined' && window.agileEmailsAIClassifier;
+      const AI_CONFIDENCE_THRESHOLD = 0.35;
+
+      if (useAI && aiClassifier && typeof aiClassifier.classify === 'function') {
+        const combinedText = [email.from, email.subject, email.body].filter(Boolean).join(' ');
+        let aiResult = null;
+        try {
+          aiResult = await aiClassifier.classify(combinedText);
+        } catch (e) {
+          console.warn('AgileEmails: AI classify error', e);
+        }
+        const aiConfident = aiResult && aiResult.category && (aiResult.score == null || aiResult.score >= AI_CONFIDENCE_THRESHOLD);
+        if (aiConfident) {
+          // Use AI result but run NLP engine for stars, genre, entities etc.
+          classification = classifier.classify(email);
+          classification.category = aiResult.category;
+        } else {
+          classification = classifier.classify(email);
+        }
+      } else {
+        classification = classifier.classify(email);
+      }
+    }
+
+    // Check DND rules
+    const isDND = classifier.checkDNDRules(email, settings.dndRules || []);
+
+    // Apply priority topics boost (user-selected categories get +1)
+    let finalPriority = classification.priority;
+    const priorityTopics = settings.priorityTopics || [];
+    if (priorityTopics.includes(classification.category) && finalPriority < 5) {
+      finalPriority = Math.min(5, finalPriority + 1);
+    }
+
+    // Apply sender boost: emails from listed addresses get +1 and minimum priority 3
+    const boostSenders = (settings.priorityBoostSenders || []).map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    const fromLower = (email.from || '').trim().toLowerCase();
+    if (boostSenders.length && fromLower) {
+      if (boostSenders.some(addr => fromLower.includes(addr))) {
+        finalPriority = Math.max(3, Math.min(5, finalPriority + 1));
+      }
+    }
+
+    // Sender reputation boost: frequent important senders get a boost
+    const senderRep = senderReputationCache[fromLower];
+    if (senderRep && senderRep.count >= 3) {
+      if (senderRep.avgPriority >= 4) {
+        finalPriority = Math.min(5, finalPriority + 1);
+      } else if (senderRep.avgPriority <= 1.5 && finalPriority > 1) {
+        finalPriority = Math.max(1, finalPriority - 1);
+      }
+    }
+
+    // Update sender reputation
+    updateSenderReputation(fromLower, classification.priority, classification.category);
+
+    const emailData = {
+      ...email,
+      ...classification,
+      priority: finalPriority,
+      isDND,
+      processedAt: Date.now()
+    };
+    const serializableEmailData = { ...emailData };
+    delete serializableEmailData.element;
+
+    emailCache.set(email.id, emailData);
+
+    // Save to storage
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'saveEmailData',
+          emailData: serializableEmailData
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+          } else {
+            resolve(response);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('AgileEmails: Error saving email data', error);
+    }
+  } catch (error) {
+    console.error('AgileEmails: Error processing email', error);
+  }
+}
+
+function applyVisualIndicators(emails, settings) {
+  if (!classifier) return;
+  
+  // Collect all processed emails with their elements
+  const emailElements = [];
+  emails.forEach(emailData => {
+    try {
+      const cached = emailCache.get(emailData.id);
+      if (cached && cached.element && document.body.contains(cached.element)) {
+        // Skip if already processed and overlay exists
+        const existingOverlay = cached.element.querySelector('.agileemails-overlay');
+        if (existingOverlay && existingOverlay.getAttribute('data-email-id') === cached.id) {
+          // Already has correct overlay, just update if needed
+          emailElements.push({
+            element: cached.element,
+            data: cached,
+            skipOverlay: true
+          });
+        } else {
+          emailElements.push({
+            element: cached.element,
+            data: cached,
+            skipOverlay: false
+          });
+        }
+      }
+    } catch (error) {
+      console.error('AgileEmails: Error processing email for indicators', error);
+    }
+  });
+  
+  // Apply visual overlays to each email
+  emailElements.forEach(({ element, data, skipOverlay }) => {
+    try {
+      // If skipOverlay is true, just update styles without recreating overlay
+      if (skipOverlay) {
+        element.classList.remove('agileemails-priority-5', 'agileemails-priority-4', 'agileemails-priority-3', 'agileemails-priority-2', 'agileemails-priority-1');
+        element.classList.add(`agileemails-priority-${data.priority}`);
+        
+        if (settings.settings?.showPriorityColors !== false) {
+          const priorityColor = classifier.getPriorityColor(data.priority);
+          const borderWidth = data.priority >= 4 ? '6px' : data.priority >= 3 ? '4px' : '2px';
+          element.style.borderLeft = `${borderWidth} solid ${priorityColor}`;
+        }
+        return;
+      }
+      
+      // Check if overlay already exists and is correct - if so, skip re-adding
+      const existingOverlay = element.querySelector('.agileemails-overlay');
+      const existingDataId = existingOverlay?.getAttribute('data-email-id');
+      
+      // Only update if email ID changed or overlay doesn't exist
+      if (existingOverlay && existingDataId === data.id) {
+        // Overlay already exists for this email, just update styles if needed
+        element.classList.remove('agileemails-priority-5', 'agileemails-priority-4', 'agileemails-priority-3', 'agileemails-priority-2', 'agileemails-priority-1');
+        element.classList.add(`agileemails-priority-${data.priority}`);
+        
+        // Update border if needed
+        if (settings.settings?.showPriorityColors !== false) {
+          const priorityColor = classifier.getPriorityColor(data.priority);
+          const borderWidth = data.priority >= 4 ? '6px' : data.priority >= 3 ? '4px' : '2px';
+          element.style.borderLeft = `${borderWidth} solid ${priorityColor}`;
+        }
+        return; // Skip re-creating overlay
+      }
+      
+      // Remove existing AgileEmails indicators if they exist
+      if (existingOverlay) {
+        existingOverlay.remove();
+      }
+      
+      const existingBadge = element.querySelector('.agileemails-badge');
+      if (existingBadge) {
+        existingBadge.remove();
+      }
+      
+      const existingPriorityBadge = element.querySelector('.agileemails-priority-badge');
+      if (existingPriorityBadge) {
+        existingPriorityBadge.remove();
+      }
+      
+      // Remove existing border
+      element.style.borderLeft = '';
+      element.classList.remove('agileemails-priority-5', 'agileemails-priority-4', 'agileemails-priority-3', 'agileemails-priority-2', 'agileemails-priority-1');
+      
+      // Add priority class for styling
+      element.classList.add(`agileemails-priority-${data.priority}`);
+      
+      // Check if visual indicators are enabled
+      if (settings.settings?.showPriorityColors !== false) {
+        // Add priority color border (thicker for higher priority, more vibrant colors)
+        const priorityColor = classifier.getPriorityColor(data.priority);
+        const borderWidth = data.priority >= 4 ? '6px' : data.priority >= 3 ? '4px' : '2px';
+        element.style.borderLeft = `${borderWidth} solid ${priorityColor}`;
+        // Add subtle background tint for better visibility
+        if (data.priority >= 4) {
+          element.style.backgroundColor = `rgba(${data.priority === 5 ? '255, 0, 0' : '255, 140, 0'}, 0.08)`;
+        } else if (data.priority === 3) {
+          element.style.backgroundColor = 'rgba(255, 215, 0, 0.06)';
+        }
+      }
+      
+      // Create overlay with urgency info
+      const overlay = document.createElement('div');
+      overlay.className = 'agileemails-overlay';
+      
+      const priorityColor = classifier.getPriorityColor(data.priority);
+
+      // Star rating + Priority indicator
+      const stars = data.starRating || data.priority || 1;
+      const starColor = classifier.getStarColor(stars);
+      const starsText = classifier.renderStars(stars);
+
+      let overlayHTML = `
+        <div class="agileemails-priority-indicator-left" style="background-color: ${priorityColor}">
+          <span class="agileemails-priority-number-only">${data.priority}</span>
+        </div>
+      `;
+
+      // Star rating
+      overlayHTML += `<span class="agileemails-stars" style="color: ${starColor}; letter-spacing: 0.5px; font-size: 10px;">${starsText}</span>`;
+
+      // Category badge
+      if (settings.settings?.showCategoryBadges !== false) {
+        const categoryColor = settings.categories?.[data.category]?.color || classifier.getCategoryColor(data.category);
+        const categoryName = classifier.getCategoryLabel(data.category);
+        overlayHTML += `<div class="agileemails-category-badge" style="background-color: ${categoryColor}">${categoryName}</div>`;
+
+        if (data.subCategory) {
+          overlayHTML += `<span class="agileemails-subcategory">${classifier.getSubCategoryLabel(data.subCategory)}</span>`;
+        }
+      }
+
+      // Genre badge
+      if (data.genreIcon && data.genreLabel) {
+        overlayHTML += `<span class="agileemails-genre-badge">${data.genreIcon} ${data.genreLabel}</span>`;
+      }
+
+      // Info chips
+      const infoChips = [];
+      if (data.urgency && data.urgency.signals && data.urgency.signals.length > 0 && data.urgency.score >= 3) {
+        infoChips.push(`<span class="agileemails-info-chip urgent">${data.urgency.signals[0]}</span>`);
+      }
+      if (data.genre === 'action-required') {
+        infoChips.push(`<span class="agileemails-info-chip action">Action Required</span>`);
+      }
+      if (data.importantInfo) {
+        if (data.importantInfo.dates && data.importantInfo.dates.length > 0) {
+          infoChips.push(`<span class="agileemails-info-chip date">${data.importantInfo.dates[0]}</span>`);
+        }
+        if (data.importantInfo.money && data.importantInfo.money.length > 0) {
+          infoChips.push(`<span class="agileemails-info-chip money">${data.importantInfo.money[0]}</span>`);
+        }
+      }
+      // Sentiment chip (only for strong sentiment)
+      if (data.sentiment && data.sentiment.confidence > 0.3) {
+        if (data.sentiment.label === 'positive') {
+          infoChips.push(`<span class="agileemails-info-chip" style="background: #F0FDF4; color: #16A34A; font-weight: 500;">+</span>`);
+        } else if (data.sentiment.label === 'negative') {
+          infoChips.push(`<span class="agileemails-info-chip" style="background: #FEF2F2; color: #DC2626; font-weight: 500;">−</span>`);
+        }
+      }
+      if (infoChips.length > 0) {
+        overlayHTML += `<div class="agileemails-info-items">${infoChips.slice(0, 4).join('')}</div>`;
+      }
+
+      if (data.isNewsletter) {
+        overlayHTML += '<span class="agileemails-newsletter-badge">Newsletter</span>';
+      }
+      if (data.isDND) {
+        overlayHTML += '<span class="agileemails-dnd-badge">DND</span>';
+      }
+      overlayHTML += `<button type="button" class="agileemails-fix-btn" data-email-id="${(data.id || '').replace(/"/g, '&quot;')}" title="Correct category">Fix</button>`;
+
+      overlay.innerHTML = overlayHTML;
+      overlay.setAttribute('data-email-id', data.id); // Mark overlay with email ID
+      
+      // Store email ID on the element for easier lookup
+      element.setAttribute('data-agileemails-id', data.id);
+
+      // Fix button: correct category
+      const fixBtn = overlay.querySelector('.agileemails-fix-btn');
+      if (fixBtn) {
+        fixBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          showCategoryPicker(data.id, element, settings);
+        });
+      }
+      
+      // Insert priority indicator on the left side, in front of sender's name
+      // Find the sender element (where the sender name is displayed)
+      let senderEl = element.querySelector('span.yW span[email]');
+      if (!senderEl) {
+        senderEl = element.querySelector('span[email]');
+      }
+      if (!senderEl) {
+        senderEl = element.querySelector('.yW span');
+      }
+      if (!senderEl) {
+        senderEl = element.querySelector('[email]');
+      }
+      
+      const priorityIndicator = overlay.querySelector('.agileemails-priority-indicator-left');
+      
+      if (senderEl && priorityIndicator) {
+        // Remove existing priority indicator if any (check parent containers too)
+        const existingPriority = element.querySelector('.agileemails-priority-indicator-left');
+        if (existingPriority) {
+          existingPriority.remove();
+        }
+        
+        // Insert priority indicator right before the sender element
+        // Find the parent container of the sender
+        const senderParent = senderEl.parentElement;
+        if (senderParent) {
+          senderParent.insertBefore(priorityIndicator, senderEl);
+        } else {
+          // Fallback: insert before sender element itself
+          senderEl.parentNode.insertBefore(priorityIndicator, senderEl);
+        }
+      } else if (priorityIndicator) {
+        // Fallback: try first cell if sender element not found
+        const firstCell = element.querySelector('td:first-child') || element.querySelector('div:first-child') || element.firstElementChild;
+        if (firstCell) {
+          const existingPriority = firstCell.querySelector('.agileemails-priority-indicator-left');
+          if (existingPriority) {
+            existingPriority.remove();
+          }
+          firstCell.insertBefore(priorityIndicator, firstCell.firstChild);
+        }
+      }
+      
+      // Append rest of overlay to row (for category badges, etc. on right side)
+      if (overlay.children.length > 0) {
+        element.appendChild(overlay);
+      } else {
+        overlay.remove();
+      }
+      
+      // Ensure the row has relative positioning for absolute overlay
+      if (getComputedStyle(element).position === 'static') {
+        element.style.position = 'relative';
+      }
+      
+      // Mark element as processed to prevent re-processing
+      element.setAttribute('data-agileemails-processed', 'true');
+      
+      // Watch this specific overlay for removal
+      const overlayWatcher = new MutationObserver((mutations) => {
+        mutations.forEach(mutation => {
+          mutation.removedNodes.forEach(node => {
+            if (node === overlay || (node.nodeType === 1 && node.contains && node.contains(overlay))) {
+              // Overlay was removed, re-apply it
+              setTimeout(() => {
+                if (document.body.contains(element) && emailCache.has(data.id)) {
+                  applyOverlayToElement(element, data, settings);
+                }
+              }, 50);
+            }
+          });
+        });
+      });
+      
+      // Watch the parent for overlay removal
+      if (element.parentElement) {
+        overlayWatcher.observe(element.parentElement, {
+          childList: true,
+          subtree: true
+        });
+      }
+      
+      // Hide if DND active
+      if (data.isDND) {
+        element.style.opacity = '0.3';
+        element.style.pointerEvents = 'none';
+        element.classList.add('agileemails-dnd');
+      } else {
+        element.style.opacity = '';
+        element.style.pointerEvents = '';
+        element.classList.remove('agileemails-dnd');
+      }
+    } catch (error) {
+      console.error('AgileEmails: Error applying visual indicators', error);
+    }
+  });
+  
+  // Reorder emails by priority if enabled (but re-apply overlays after)
+  if (settings.settings?.reorderByPriority === true) {
+    reorderEmailsByPriority(emailElements);
+    // Re-apply overlays immediately after reordering (Gmail may have removed them)
+    setTimeout(() => {
+      reapplyOverlays();
+    }, 100);
+  }
+}
+
+function showCategoryPicker(threadId, element, settings) {
+  if (!element || !document.body.contains(element)) return;
+  const existing = document.getElementById('agileemails-category-picker');
+  if (existing) existing.remove();
+
+  const categories = settings.categories || {};
+  const categoryKeys = Object.keys(categories).filter(k => categories[k]?.enabled !== false);
+  if (categoryKeys.length === 0) return;
+
+  const picker = document.createElement('div');
+  picker.id = 'agileemails-category-picker';
+  picker.className = 'agileemails-category-picker';
+  const escapeAttr = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const safeColor = (c) => {
+    const s = String(c ?? '').trim();
+    if (!s || /[<>"'`;\\]/.test(s)) return '#808080';
+    return s;
+  };
+  picker.innerHTML = categoryKeys.map(cat => {
+    const color = safeColor(categories[cat]?.color) || (classifier ? classifier.getCategoryColor(cat) : '#808080');
+    const label = classifier ? escapeAttr(classifier.getCategoryLabel(cat)) : escapeAttr(cat.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
+    return `<button type="button" class="agileemails-picker-option" data-category="${escapeAttr(cat)}"><span class="agileemails-picker-color" style="background:${color}"></span>${label}</button>`;
+  }).join('');
+
+  document.body.appendChild(picker);
+  const rect = element.getBoundingClientRect();
+  picker.style.top = `${rect.bottom + 4}px`;
+  picker.style.left = `${Math.min(rect.right - 120, Math.max(8, rect.left))}px`;
+
+  const close = (e) => {
+    if (e && e.target && picker.isConnected && picker.contains(e.target)) return;
+    document.removeEventListener('click', close, { capture: true });
+    if (picker.isConnected) picker.remove();
+  };
+  document.addEventListener('click', close, { capture: true });
+
+  picker.querySelectorAll('.agileemails-picker-option').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const category = btn.getAttribute('data-category');
+      if (!category) return;
+      chrome.storage.local.get(['categoryOverrides'], (data) => {
+        const overrides = data.categoryOverrides || {};
+        overrides[threadId] = category;
+        chrome.storage.local.set({ categoryOverrides: overrides }, () => {
+          if (chrome.runtime.lastError) {
+            close();
+            return;
+          }
+          const cached = emailCache.get(threadId);
+          const priority = classifier?.categories?.[category]?.priority ?? 3;
+          const updatedData = cached
+            ? { ...cached, category, priority }
+            : { id: threadId, category, priority, subject: '', from: '', importantInfo: null, isNewsletter: false, isDND: false };
+          if (cached) {
+            emailCache.set(threadId, updatedData);
+          }
+          chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier', 'categoryOverrides'], (fresh) => {
+            if (element && document.body.contains(element)) {
+              applyOverlayToElement(element, updatedData, fresh);
+            }
+            close();
+          });
+        });
+      });
+    });
+  });
+
+}
+
+function parseGmailDate(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const s = dateStr.trim();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // "10:30 AM" / "3:45 PM" → today at that time
+  const timeMatch = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (timeMatch) {
+    let h = parseInt(timeMatch[1], 10);
+    const m = parseInt(timeMatch[2], 10);
+    if (timeMatch[3].toUpperCase() === 'PM' && h < 12) h += 12;
+    if (timeMatch[3].toUpperCase() === 'AM' && h === 12) h = 0;
+    const d = new Date(today);
+    d.setHours(h, m, 0, 0);
+    return d.getTime();
+  }
+
+  // "Yesterday" → yesterday
+  if (/^yesterday$/i.test(s)) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 1);
+    return d.getTime();
+  }
+
+  // "Nov 20" / "Dec 1" → this year (or previous year if in future)
+  const shortMatch = s.match(/^([A-Za-z]+)\s+(\d{1,2})$/);
+  if (shortMatch) {
+    let d = new Date(`${shortMatch[1]} ${shortMatch[2]}, ${now.getFullYear()}`);
+    if (!isNaN(d.getTime()) && d > now) {
+      d = new Date(`${shortMatch[1]} ${shortMatch[2]}, ${now.getFullYear() - 1}`);
+    }
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  // "Dec 1, 2024" or similar
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed.getTime();
+}
+
+// ===============================
+// SENDER REPUTATION TRACKING
+// ===============================
+function loadSenderReputation() {
+  try {
+    chrome.storage.local.get(['senderReputation'], (data) => {
+      if (data.senderReputation && typeof data.senderReputation === 'object') {
+        senderReputationCache = data.senderReputation;
+      }
+    });
+  } catch (e) {
+    console.warn('AgileEmails: Error loading sender reputation', e);
+  }
+}
+
+function updateSenderReputation(senderLower, priority, category) {
+  if (!senderLower) return;
+  const rep = senderReputationCache[senderLower] || { count: 0, totalPriority: 0, avgPriority: 0, categories: {} };
+  rep.count++;
+  rep.totalPriority += priority;
+  rep.avgPriority = Math.round((rep.totalPriority / rep.count) * 10) / 10;
+  rep.categories[category] = (rep.categories[category] || 0) + 1;
+  rep.lastSeen = Date.now();
+  senderReputationCache[senderLower] = rep;
+  senderRepDirty = true;
+}
+
+// Periodically save sender reputation to storage (debounced)
+setInterval(() => {
+  if (!senderRepDirty) return;
+  senderRepDirty = false;
+  try {
+    // Keep only the top 500 senders by recency
+    const entries = Object.entries(senderReputationCache);
+    if (entries.length > 500) {
+      entries.sort((a, b) => (b[1].lastSeen || 0) - (a[1].lastSeen || 0));
+      senderReputationCache = Object.fromEntries(entries.slice(0, 500));
+    }
+    chrome.storage.local.set({ senderReputation: senderReputationCache });
+  } catch (e) {
+    console.warn('AgileEmails: Error saving sender reputation', e);
+  }
+}, 30000); // Every 30 seconds
+
+// Load sender reputation on startup
+loadSenderReputation();
+
+function reorderEmailsByPriority(emailElements) {
+  try {
+    // Don't reorder if there are too few emails (not worth it)
+    if (emailElements.length < 3) return;
+    
+    // Sort by priority (desc) → parsed date (desc, newer first) → unread (true before false) → processedAt (desc)
+    emailElements.sort((a, b) => {
+      if (b.data.priority !== a.data.priority) {
+        return b.data.priority - a.data.priority;
+      }
+      const aTs = parseGmailDate(a.data.date) ?? (a.data.processedAt || 0);
+      const bTs = parseGmailDate(b.data.date) ?? (b.data.processedAt || 0);
+      if (aTs !== bTs) {
+        return bTs - aTs;
+      }
+      const aUnread = a.data.unread ? 1 : 0;
+      const bUnread = b.data.unread ? 1 : 0;
+      if (aUnread !== bUnread) {
+        return bUnread - aUnread;
+      }
+      return (b.data.processedAt || 0) - (a.data.processedAt || 0);
+    });
+    
+    // Find the parent container (Gmail's email list)
+    if (emailElements.length === 0) return;
+    
+    const firstElement = emailElements[0].element;
+    const parent = firstElement.parentElement;
+    if (!parent) return;
+    
+    // Store original positions to avoid unnecessary reordering
+    const originalOrder = Array.from(parent.children);
+    
+    // Only reorder if there's a significant difference
+    let needsReorder = false;
+    for (let i = 0; i < Math.min(emailElements.length, 5); i++) {
+      const expectedElement = emailElements[i].element;
+      const currentElement = originalOrder[i];
+      if (expectedElement !== currentElement) {
+        needsReorder = true;
+        break;
+      }
+    }
+    
+    if (!needsReorder) return;
+    
+    // Reorder elements in DOM (but do it in a way that minimizes re-renders)
+    emailElements.forEach(({ element }) => {
+      if (document.body.contains(element)) {
+        parent.appendChild(element);
+      }
+    });
+    
+    // Immediately re-apply overlays after reordering
+    setTimeout(() => {
+      reapplyOverlays();
+    }, 50);
+  } catch (error) {
+    console.error('AgileEmails: Error reordering emails', error);
+  }
+}
+
+// Re-apply overlays that may have been removed by Gmail
+// This function is called very frequently to ensure overlays stay
+let overlaySettingsCache = null;
+let lastSettingsFetch = 0;
+
+function reapplyOverlays() {
+  if (isProcessing || isReapplyingOverlays) return;
+  
+  // Safety check - ensure emailCache exists
+  if (!emailCache || typeof emailCache.has !== 'function') {
+    return;
+  }
+  
+  isReapplyingOverlays = true;
+  
+  try {
+    if (document.visibilityState === 'hidden') {
+      isReapplyingOverlays = false;
+      return;
+    }
+    if (!chrome?.storage?.local) {
+      console.warn('AgileEmails: chrome.storage.local unavailable, skipping reapply');
+      isReapplyingOverlays = false;
+      return;
+    }
+    // Cache settings to avoid frequent storage calls
+    const now = Date.now();
+    if (!overlaySettingsCache || now - lastSettingsFetch > 5000) {
+      chrome.storage.local.get(['categories', 'dndRules', 'settings', 'pricingTier'], (data) => {
+        try {
+          if (chrome.runtime?.lastError) {
+            throw chrome.runtime.lastError;
+          }
+          overlaySettingsCache = data;
+          lastSettingsFetch = now;
+          doReapplyOverlays(data);
+        } catch (error) {
+          console.error('AgileEmails: Error in reapplyOverlays callback', error);
+        } finally {
+          isReapplyingOverlays = false;
+        }
+      });
+    } else {
+      doReapplyOverlays(overlaySettingsCache);
+      isReapplyingOverlays = false;
+    }
+  } catch (error) {
+    console.error('AgileEmails: Error reapplying overlays', error);
+    isReapplyingOverlays = false;
+  }
+}
+
+function doReapplyOverlays(settings) {
+  if (!settings) return;
+  
+  // Safety check for emailCache
+  if (!emailCache || typeof emailCache.has !== 'function' || typeof emailCache.get !== 'function') {
+    console.warn('AgileEmails: emailCache not available, skipping overlay reapplication');
+    return;
+  }
+  
+  try {
+    // Get all email rows currently visible
+    const emailRows = document.querySelectorAll('tr[role="row"]');
+    const rowsToProcess = [];
+    if (!emailRows || emailRows.length === 0 || !document.body) {
+      return;
+    }
+    
+    emailRows.forEach(row => {
+      try {
+        if (!(row instanceof Element)) return;
+        // Skip if row is not visible
+        if (row.offsetParent === null) return;
+        
+        // Check if this row has an overlay
+        const existingOverlay = row.querySelector('.agileemails-overlay');
+        
+        // Try multiple ways to find email ID
+        let emailId = row.getAttribute('data-agileemails-id') ||
+                      row.getAttribute('data-thread-perm-id') ||
+                      row.closest('[data-thread-perm-id]')?.getAttribute('data-thread-perm-id');
+        
+        // If we have an email ID and it's in cache
+        if (emailId && emailCache.has(emailId)) {
+          const emailData = emailCache.get(emailId);
+          if (emailData) {
+            // If overlay is missing or doesn't match, re-apply
+            if (!existingOverlay || existingOverlay.getAttribute('data-email-id') !== emailId) {
+              rowsToProcess.push({
+                element: row,
+                data: emailData
+              });
+            }
+          }
+        } else if (!emailId) {
+          // Try to extract email ID from the row content (fast path)
+          const subjectEl = row.querySelector('span.bog');
+          const senderEl = row.querySelector('span[email]') || row.querySelector('.yW span');
+          if (subjectEl && senderEl) {
+            const senderEmail = senderEl.getAttribute('email') || senderEl.textContent || '';
+            const subject = subjectEl.textContent || '';
+            // Try to find in cache by matching subject and sender
+            if (typeof emailCache.entries === 'function') {
+              for (const [id, cachedData] of emailCache.entries()) {
+                if (cachedData && cachedData.subject === subject && cachedData.from === senderEmail) {
+                  emailId = id;
+                  row.setAttribute('data-agileemails-id', emailId); // Cache it for next time
+                  if (!existingOverlay || existingOverlay.getAttribute('data-email-id') !== emailId) {
+                    rowsToProcess.push({
+                      element: row,
+                      data: cachedData
+                    });
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } catch (rowError) {
+        console.warn('AgileEmails: Error processing row in doReapplyOverlays', rowError);
+        // Continue with next row
+      }
+    });
+    
+    // Re-apply overlays for rows that need them (batch process)
+    if (rowsToProcess.length > 0) {
+      rowsToProcess.forEach(({ element, data: emailData }) => {
+        applyOverlayToElement(element, emailData, settings);
+      });
+    }
+  } catch (error) {
+    console.error('AgileEmails: Error in doReapplyOverlays', error);
+  }
+}
+
+// Apply overlay to a single element
+function applyOverlayToElement(element, emailData, settings) {
+  if (!classifier || !element || !document.body.contains(element)) return;
+  
+  try {
+    // Remove existing overlay if any
+    const existingOverlay = element.querySelector('.agileemails-overlay');
+    if (existingOverlay) {
+      existingOverlay.remove();
+    }
+    
+    // Update priority class
+    element.classList.remove('agileemails-priority-5', 'agileemails-priority-4', 'agileemails-priority-3', 'agileemails-priority-2', 'agileemails-priority-1');
+    element.classList.add(`agileemails-priority-${emailData.priority}`);
+    
+    // Add border with more vibrant colors
+    if (settings.settings?.showPriorityColors !== false) {
+      const priorityColor = classifier.getPriorityColor(emailData.priority);
+      const borderWidth = emailData.priority >= 4 ? '6px' : emailData.priority >= 3 ? '4px' : '2px';
+      element.style.borderLeft = `${borderWidth} solid ${priorityColor}`;
+      // Add subtle background tint for better visibility
+      if (emailData.priority >= 4) {
+        element.style.backgroundColor = `rgba(${emailData.priority === 5 ? '255, 0, 0' : '255, 140, 0'}, 0.08)`;
+      } else if (emailData.priority === 3) {
+        element.style.backgroundColor = 'rgba(255, 215, 0, 0.06)';
+      }
+    }
+    
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'agileemails-overlay';
+    overlay.setAttribute('data-email-id', emailData.id);
+    
+    const priorityColor = classifier.getPriorityColor(emailData.priority);
+
+    // Star rating + Priority indicator on left
+    const stars = emailData.starRating || emailData.priority || 1;
+    const starColor = classifier.getStarColor(stars);
+    const starsText = classifier.renderStars(stars);
+
+    let overlayHTML = `
+      <div class="agileemails-priority-indicator-left" style="background-color: ${priorityColor}">
+        <span class="agileemails-priority-number-only">${emailData.priority}</span>
+      </div>
+    `;
+
+    // Star rating display
+    overlayHTML += `<span class="agileemails-stars" style="color: ${starColor}; letter-spacing: 0.5px; font-size: 10px;">${starsText}</span>`;
+
+    // Category badge
+    if (settings.settings?.showCategoryBadges !== false) {
+      const categoryColor = settings.categories?.[emailData.category]?.color || classifier.getCategoryColor(emailData.category);
+      const categoryName = classifier.getCategoryLabel(emailData.category);
+      overlayHTML += `<div class="agileemails-category-badge" style="background-color: ${categoryColor}">${categoryName}</div>`;
+
+      // Sub-category label
+      if (emailData.subCategory) {
+        const subLabel = classifier.getSubCategoryLabel(emailData.subCategory);
+        overlayHTML += `<span class="agileemails-subcategory">${subLabel}</span>`;
+      }
+    }
+
+    // Genre badge
+    if (emailData.genreIcon && emailData.genreLabel) {
+      overlayHTML += `<span class="agileemails-genre-badge">${emailData.genreIcon} ${emailData.genreLabel}</span>`;
+    }
+
+    // Info chips: urgency, dates, money
+    const infoChips = [];
+    if (emailData.urgency && emailData.urgency.signals && emailData.urgency.signals.length > 0 && emailData.urgency.score >= 3) {
+      infoChips.push(`<span class="agileemails-info-chip urgent">${emailData.urgency.signals[0]}</span>`);
+    }
+    if (emailData.genre === 'action-required') {
+      infoChips.push(`<span class="agileemails-info-chip action">Action Required</span>`);
+    }
+    if (emailData.importantInfo) {
+      if (emailData.importantInfo.dates && emailData.importantInfo.dates.length > 0) {
+        infoChips.push(`<span class="agileemails-info-chip date">${emailData.importantInfo.dates[0]}</span>`);
+      }
+      if (emailData.importantInfo.money && emailData.importantInfo.money.length > 0) {
+        infoChips.push(`<span class="agileemails-info-chip money">${emailData.importantInfo.money[0]}</span>`);
+      }
+    }
+    // Sentiment chip (only for strong sentiment)
+    if (emailData.sentiment && emailData.sentiment.confidence > 0.3) {
+      if (emailData.sentiment.label === 'positive') {
+        infoChips.push(`<span class="agileemails-info-chip" style="background: #F0FDF4; color: #16A34A; font-weight: 500;">+</span>`);
+      } else if (emailData.sentiment.label === 'negative') {
+        infoChips.push(`<span class="agileemails-info-chip" style="background: #FEF2F2; color: #DC2626; font-weight: 500;">−</span>`);
+      }
+    }
+    if (infoChips.length > 0) {
+      overlayHTML += `<div class="agileemails-info-items">${infoChips.slice(0, 4).join('')}</div>`;
+    }
+
+    // Newsletter/DND indicators
+    if (emailData.isNewsletter) {
+      overlayHTML += '<span class="agileemails-newsletter-badge">Newsletter</span>';
+    }
+    if (emailData.isDND) {
+      overlayHTML += '<span class="agileemails-dnd-badge">DND</span>';
+    }
+    overlayHTML += `<button type="button" class="agileemails-fix-btn" data-email-id="${(emailData.id || '').replace(/"/g, '&quot;')}" title="Correct category">Fix</button>`;
+
+    overlay.innerHTML = overlayHTML;
+
+    const fixBtn = overlay.querySelector('.agileemails-fix-btn');
+    if (fixBtn) {
+      fixBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        showCategoryPicker(emailData.id, element, settings);
+      });
+    }
+
+    // Store email ID on element for easier lookup
+    element.setAttribute('data-agileemails-id', emailData.id);
+
+    // Insert priority indicator on the left side, in front of sender's name
+    let senderEl = element.querySelector('span.yW span[email]');
+    if (!senderEl) senderEl = element.querySelector('span[email]');
+    if (!senderEl) senderEl = element.querySelector('.yW span');
+    if (!senderEl) senderEl = element.querySelector('[email]');
+
+    const priorityIndicator = overlay.querySelector('.agileemails-priority-indicator-left');
+
+    if (senderEl && priorityIndicator) {
+      const existingPriority = element.querySelector('.agileemails-priority-indicator-left');
+      if (existingPriority) existingPriority.remove();
+
+      const senderParent = senderEl.parentElement;
+      if (senderParent) {
+        senderParent.insertBefore(priorityIndicator, senderEl);
+      } else {
+        senderEl.parentNode.insertBefore(priorityIndicator, senderEl);
+      }
+    } else if (priorityIndicator) {
+      const firstCell = element.querySelector('td:first-child') || element.querySelector('div:first-child') || element.firstElementChild;
+      if (firstCell) {
+        const existingPriority = firstCell.querySelector('.agileemails-priority-indicator-left');
+        if (existingPriority) existingPriority.remove();
+        firstCell.insertBefore(priorityIndicator, firstCell.firstChild);
+      }
+    }
+
+    // Append rest of overlay to row
+    if (overlay.children.length > 0) {
+      element.appendChild(overlay);
+    } else {
+      overlay.remove();
+    }
+
+    // Ensure relative positioning
+    if (getComputedStyle(element).position === 'static') {
+      element.style.position = 'relative';
+    }
+
+    // DND styling
+    if (emailData.isDND) {
+      element.style.opacity = '0.3';
+      element.style.pointerEvents = 'none';
+      element.classList.add('agileemails-dnd');
+    } else {
+      element.style.opacity = '';
+      element.style.pointerEvents = '';
+      element.classList.remove('agileemails-dnd');
+    }
+
+    // Store references for re-application
+    element._agileemailsOverlay = overlay;
+    element._agileemailsData = emailData;
+    element._agileemailsSettings = settings;
+  } catch (error) {
+    console.error('AgileEmails: Error applying overlay to element', error);
+  }
+}
+
+// Listen for messages from background
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'processEmails') {
+    processGmailPage().then(() => {
+      sendResponse({ success: true });
+    }).catch((error) => {
+      console.error('AgileEmails: Error processing emails', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true; // Keep channel open for async response
+  } else if (request.action === 'autoDelete') {
+    handleAutoDelete(request.category).then(() => {
+      sendResponse({ success: true });
+    }).catch((error) => {
+      console.error('AgileEmails: Error handling auto-delete', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  } else if (request.action === 'highlightEmail') {
+    highlightEmail(request.emailId);
+    sendResponse({ success: true });
+    return true;
+  }
+  return false;
+});
+
+async function handleAutoDelete(category) {
+  try {
+    const data = await new Promise((resolve) => {
+      chrome.storage.local.get(['categories'], resolve);
+    });
+    
+    const autoDeleteDays = data.categories?.[category]?.autoDelete;
+    if (!autoDeleteDays) return;
+    
+    // Auto-delete logic for specific category
+    emailCache.forEach((emailData, id) => {
+      if (emailData.category === category && emailData.element) {
+        const deleteAge = emailData.processedAt ? 
+          (Date.now() - emailData.processedAt) / (1000 * 60 * 60 * 24) : 0;
+        
+        if (deleteAge >= autoDeleteDays) {
+          // Mark for deletion (hide from view)
+          if (document.body.contains(emailData.element)) {
+            emailData.element.style.display = 'none';
+            emailData.element.classList.add('agileemails-deleted');
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error('AgileEmails: Error in handleAutoDelete', error);
+  }
+}
+
+function highlightEmail(emailId) {
+  try {
+    const emailData = emailCache.get(emailId);
+    if (emailData && emailData.element && document.body.contains(emailData.element)) {
+      // Scroll to element
+      emailData.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      
+      // Add highlight effect
+      emailData.element.style.backgroundColor = '#fff3cd';
+      emailData.element.style.transition = 'background-color 0.3s';
+      
+      setTimeout(() => {
+        emailData.element.style.backgroundColor = '';
+      }, 2000);
+    }
+  } catch (error) {
+    console.error('AgileEmails: Error highlighting email', error);
+  }
+}
+
+// ===============================
+// THREAD SUMMARY POPUP
+// ===============================
+let summaryPopupTimeout = null;
+let activeSummaryPopup = null;
+
+function setupThreadSummaryListeners() {
+  // Attach hover listeners to email rows for summary popup
+  const main = document.querySelector('div[role="main"]') || document.body;
+  main.addEventListener('mouseenter', (e) => {
+    const row = e.target.closest('tr[role="row"]');
+    if (!row) return;
+
+    // Clear any pending popup
+    if (summaryPopupTimeout) clearTimeout(summaryPopupTimeout);
+
+    // Delay before showing popup (700ms hover)
+    summaryPopupTimeout = setTimeout(() => {
+      showThreadSummaryPopup(row);
+    }, 700);
+  }, true);
+
+  main.addEventListener('mouseleave', (e) => {
+    const row = e.target.closest('tr[role="row"]');
+    if (!row) return;
+    if (summaryPopupTimeout) {
+      clearTimeout(summaryPopupTimeout);
+      summaryPopupTimeout = null;
+    }
+  }, true);
+}
+
+function showThreadSummaryPopup(rowElement) {
+  // Check if feature is enabled
+  if (!overlaySettingsCache || overlaySettingsCache.settings?.enableThreadSummary === false) return;
+
+  // Find cached email data for this row
+  let emailData = null;
+  emailCache.forEach((data) => {
+    if (data.element === rowElement) emailData = data;
+  });
+  if (!emailData) return;
+
+  // Remove existing popup
+  dismissSummaryPopup();
+
+  const popup = document.createElement('div');
+  popup.className = 'agileemails-summary-popup';
+  popup.id = 'agileemails-summary-popup';
+
+  // Build popup content
+  let html = '';
+
+  // Header with category and stars
+  const catColor = emailData.categoryColor || (classifier ? classifier.getCategoryColor(emailData.category) : '#808080');
+  const catLabel = classifier ? classifier.getCategoryLabel(emailData.category) : emailData.category;
+  const stars = emailData.starRating || emailData.priority || 1;
+  const starsText = classifier ? classifier.renderStars(stars) : '';
+
+  html += `<button class="close-btn" id="summaryCloseBtn">&times;</button>`;
+  html += `<h3 style="padding-right: 30px;">${escapeHtmlContent(emailData.subject || '(No subject)')}</h3>`;
+
+  // Metadata row
+  html += `<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap;">`;
+  html += `<span style="display: inline-block; padding: 2px 8px; border-radius: 4px; color: white; font-size: 10px; font-weight: 700; background: ${catColor};">${escapeHtmlContent(catLabel)}</span>`;
+  if (emailData.subCategory) {
+    html += `<span style="font-size: 11px; color: #94A3B8;">${escapeHtmlContent(classifier ? classifier.getSubCategoryLabel(emailData.subCategory) : emailData.subCategory)}</span>`;
+  }
+  if (emailData.genreIcon && emailData.genreLabel) {
+    html += `<span style="font-size: 11px; color: #64748B;">${emailData.genreIcon} ${escapeHtmlContent(emailData.genreLabel)}</span>`;
+  }
+  html += `<span style="font-size: 12px;">${starsText}</span>`;
+  // Sentiment indicator
+  if (emailData.sentiment && emailData.sentiment.confidence > 0.2) {
+    const sentColors = { positive: '#16A34A', negative: '#DC2626', neutral: '#94A3B8' };
+    const sentIcons = { positive: '&#128578;', negative: '&#128577;', neutral: '&#128528;' };
+    html += `<span style="font-size: 11px; color: ${sentColors[emailData.sentiment.label] || '#94A3B8'};">${sentIcons[emailData.sentiment.label] || ''} ${emailData.sentiment.label}</span>`;
+  }
+  html += `</div>`;
+
+  // Summary section
+  if (emailData.summary) {
+    html += `<div class="info-section">`;
+    html += `<h4>Summary</h4>`;
+    html += `<div class="info-item">${escapeHtmlContent(emailData.summary)}</div>`;
+    html += `</div>`;
+  }
+
+  // Urgency section
+  if (emailData.urgency && emailData.urgency.score >= 3) {
+    html += `<div class="info-section">`;
+    html += `<h4>Urgency (${emailData.urgency.score}/10)</h4>`;
+    if (emailData.urgency.signals && emailData.urgency.signals.length > 0) {
+      html += emailData.urgency.signals.map(s =>
+        `<div class="info-item" style="color: #DC2626;">${escapeHtmlContent(s)}</div>`
+      ).join('');
+    }
+    html += `</div>`;
+  }
+
+  // Extracted entities
+  if (emailData.importantInfo) {
+    const info = emailData.importantInfo;
+    const hasEntities = (info.dates && info.dates.length) || (info.money && info.money.length) ||
+      (info.urls && info.urls.length) || (info.actionItems && info.actionItems.length);
+
+    if (hasEntities) {
+      html += `<div class="info-section">`;
+      html += `<h4>Key Information</h4>`;
+      if (info.dates && info.dates.length > 0) {
+        html += info.dates.map(d => `<div class="info-item">&#128197; ${escapeHtmlContent(d)}</div>`).join('');
+      }
+      if (info.money && info.money.length > 0) {
+        html += info.money.map(m => `<div class="info-item">&#128176; ${escapeHtmlContent(m)}</div>`).join('');
+      }
+      if (info.actionItems && info.actionItems.length > 0) {
+        html += info.actionItems.map(a => `<div class="info-item">&#9745; ${escapeHtmlContent(a)}</div>`).join('');
+      }
+      if (info.urls && info.urls.length > 0) {
+        html += info.urls.slice(0, 3).map(u => `<div class="info-item"><a href="${escapeHtmlContent(u)}" target="_blank" rel="noopener">${escapeHtmlContent(u.length > 50 ? u.slice(0, 47) + '...' : u)}</a></div>`).join('');
+      }
+      html += `</div>`;
+    }
+  }
+
+  // Sender info
+  html += `<div class="info-section">`;
+  html += `<h4>From</h4>`;
+  html += `<div class="info-item">${escapeHtmlContent(emailData.from || 'Unknown')}</div>`;
+  if (emailData.date) {
+    html += `<div class="info-item" style="color: #94A3B8; font-size: 12px;">${escapeHtmlContent(emailData.date)}</div>`;
+  }
+  html += `</div>`;
+
+  popup.innerHTML = html;
+  document.body.appendChild(popup);
+  activeSummaryPopup = popup;
+
+  // Position popup near the row
+  const rect = rowElement.getBoundingClientRect();
+  const popupWidth = 380;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+
+  // Position to the right of the row, or left if not enough space
+  let left = rect.right + 12;
+  if (left + popupWidth > viewportWidth - 20) {
+    left = rect.left - popupWidth - 12;
+  }
+  if (left < 20) left = 20;
+
+  let top = rect.top;
+  if (top + 450 > viewportHeight) {
+    top = viewportHeight - 460;
+  }
+  if (top < 20) top = 20;
+
+  popup.style.top = `${top}px`;
+  popup.style.left = `${left}px`;
+  popup.style.right = 'auto';
+
+  // Close button
+  const closeBtn = popup.querySelector('#summaryCloseBtn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', dismissSummaryPopup);
+  }
+
+  // Auto-dismiss when mouse leaves popup area
+  popup.addEventListener('mouseleave', () => {
+    setTimeout(() => {
+      if (activeSummaryPopup && !activeSummaryPopup.matches(':hover')) {
+        dismissSummaryPopup();
+      }
+    }, 300);
+  });
+}
+
+function dismissSummaryPopup() {
+  if (activeSummaryPopup && activeSummaryPopup.isConnected) {
+    activeSummaryPopup.remove();
+  }
+  activeSummaryPopup = null;
+}
+
+function escapeHtmlContent(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Initialize only once
+if (!window.agileEmailsInitStarted) {
+  window.agileEmailsInitStarted = true;
+  init();
+  // Set up thread summary after short delay
+  setTimeout(setupThreadSummaryListeners, 2000);
+}
+

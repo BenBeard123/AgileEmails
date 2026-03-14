@@ -1,0 +1,28 @@
+{
+  "name": "agileemails",
+  "version": "1.0.0",
+  "description": "AgileEmails - Smart Email Management Chrome Extension",
+  "scripts": {
+    "build": "node build-ai.mjs",
+    "build:ai": "node build-ai.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/minicompetitioncom-rgbf/AgileEmails.git"
+  },
+  "keywords": [
+    "chrome-extension",
+    "email",
+    "gmail",
+    "productivity"
+  ],
+  "author": "AgileEmails",
+  "license": "PROPRIETARY"
+}
+
